@@ -9,5 +9,10 @@ module.exports = async function log(debugTitle, debugInfo) {
         createdAt: new Date(),
     };
 
-    return debuglog.insertOne(debugData);
+    try {
+        return await debuglog.insertOne(debugData);
+    } catch (error) {
+        console.error('debug log write failed:', error?.message);
+        return null;
+    }
 }
