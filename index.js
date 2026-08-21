@@ -1,6 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 require('dotenv').config()
+// File sink for console output (logs/bot.log, LOG_FILE to move or disable): right
+// after dotenv so every later line, boot failures included, lands in the file too.
+require('./utils/logfile.js').install();
 const { Client, Events, GatewayIntentBits, Collection, REST, Routes, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const DKPManager = require('./DKPManager/DKPManager.js');
 const Worker = require('./worker/Worker.js');
@@ -96,11 +99,6 @@ client.on(Events.InteractionCreate, async interaction => {
 	} catch (error) {
 		console.error(`Error executing command ${interaction.commandName}:`, error);
 		log(`Error executing command: ${interaction.commandName}`, error).catch(() => {});
-		try {
-			fs.appendFileSync('error.log', `[${new Date().toLocaleString()}] ${error}\n`);
-		} catch (fileError) {
-			console.error('Failed to write error.log:', fileError);
-		}
 		await safeReply(interaction, { content: '⛔ Something went wrong running that command.', flags: MessageFlags.Ephemeral });
 	}
 });
