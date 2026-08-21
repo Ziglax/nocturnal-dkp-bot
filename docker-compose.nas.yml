@@ -1,8 +1,10 @@
 # Stack complète pour NAS Synology DS1819+ (Atom C3538, pas d'instruction AVX) :
-# identique à docker-compose.yml, sauf MongoDB — les versions >= 5.0 exigent AVX
-# au démarrage, on utilise donc mongo:4.4, dernière version sans cette exigence
-# (EOL mais suffisante pour un banc de test). L'image 4.4 n'embarque pas mongosh :
-# le healthcheck passe par le shell `mongo`.
+# identique à docker-compose.yml, sauf :
+#  - MongoDB : les versions >= 5.0 exigent AVX au démarrage, on utilise donc
+#    mongo:4.4, dernière version sans cette exigence (EOL mais suffisante pour un
+#    banc de test). L'image 4.4 n'embarque pas mongosh : le healthcheck passe
+#    par le shell `mongo`.
+#  - pas de section `logging:` : voir la note sur le service dkp-bot.
 #
 # Lancement sur le NAS (fichier autonome, un seul -f) :
 #   sudo docker compose -f docker-compose.nas.yml up -d --build
@@ -26,13 +28,13 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    # No `logging:` block on purpose. The Synology Docker daemon defaults to its own
+    # `db` log driver, and that driver is the only one Container Manager's "Log" tab
+    # can read: forcing json-file here (as docker-compose.yml does) leaves the tab
+    # empty, with no log file reachable from File Station either. Rotation is
+    # handled by Container Manager (Settings > Log).
     volumes:
-      # Source code, configs, ./backups, ./error.log — live from the host.
+      # Source code, configs, ./backups, ./logs — live from the host.
       # - Code changes:       `docker compose restart dkp-bot`
       # - .env changes:       `docker compose up -d` (restart keeps creation-time env)
       # - Dependency changes: `docker compose up -d --build -V`
@@ -50,11 +52,6 @@ services:
     restart: unless-stopped
     volumes:
       - mongo-data:/data/db
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     healthcheck:
       test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 10s
