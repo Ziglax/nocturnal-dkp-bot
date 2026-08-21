@@ -1,6 +1,7 @@
 require('dotenv').config()
 const uniqid = require('uniqid');
 const { SlashCommandBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
+const { guardListener } = require('../utils/safe.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -37,7 +38,8 @@ module.exports = {
         try {
             usersInLog = await interaction.guild.members.fetch({ user: logs.map(log => log.player) });
         } catch (e) {
-            interaction.editReply({ content: 'Error fetching members', ephemeral: true });
+            await interaction.editReply({ content: 'Error fetching members', ephemeral: true });
+            return;
         }
 
         const logsEmbed = {
@@ -55,9 +57,10 @@ module.exports = {
 
         await interaction.editReply({ embeds: [logsEmbed], components: [row], ephemeral: true });
 
+        if (!interaction.channel) return;
         const collectorFilter = i => i.user.id === interaction.user.id && i.customId.endsWith(id);
         const collector = interaction.channel.createMessageComponentCollector({ time: 120_000, filter: collectorFilter });
-        collector.on('collect', async i => {
+        collector.on('collect', guardListener('searchlogs collect', async i => {
             await i.deferUpdate();
             if (i.customId.startsWith('previousPage')) {
                 currentPage--;
@@ -76,12 +79,12 @@ module.exports = {
             logsEmbed.footer.text = `${currentPage + 1}/${pages}`;
 
             await i.editReply({ embeds: [logsEmbed], components: [row] });
-        });
+        }));
 
         collector.on('end', async () => {
             previousPageButton.setDisabled(true);
             nextPageButton.setDisabled(true);
-            await interaction.editReply({ embeds: [logsEmbed], components: [row], ephemeral: true });
+            await interaction.editReply({ embeds: [logsEmbed], components: [row], ephemeral: true }).catch(() => {});
         });
     },
     restricted: false,

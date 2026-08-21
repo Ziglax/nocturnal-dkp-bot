@@ -2,6 +2,7 @@ require('dotenv').config()
 const { SlashCommandBuilder, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
 const uniqid = require('uniqid');
 const log = require('../debugger.js');
+const { guardListener } = require('../utils/safe.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -9,7 +10,7 @@ module.exports = {
         .setDescription('List all players and their current DKP'),
     async execute(interaction, manager, logger) {
         await interaction.deferReply({ ephemeral: true });
-        const guildConfig = await manager.getGuildOptions(interaction.guild.id)
+        const guildConfig = await manager.getGuildOptions(interaction.guild.id) || {}
 
         if (process.env.LOG_LEVEL === 'DEBUG') {
             log(`Executed listplayersdkps command`, {
@@ -55,7 +56,7 @@ module.exports = {
 
         const collectorFilter = i => i.user.id === interaction.user.id && i.customId.endsWith(id);
         const collector = message.createMessageComponentCollector({ time: 120_000, filter: collectorFilter });
-        collector.on('collect', async i => {
+        collector.on('collect', guardListener('listplayersdkps collect', async i => {
             if (!i.customId.startsWith('previousPage') && !i.customId.startsWith('nextPage')) {
                 return;
             }
@@ -90,14 +91,14 @@ module.exports = {
                 embeds: [embed],
                 components: [row]
             });
-        });
+        }));
 
         collector.on('end', async () => {
             previousPageButton.setDisabled(true);
             nextPageButton.setDisabled(true);
             await interaction.editReply({
                 components: [row]
-            });
+            }).catch(() => {});
         });
     },
 };

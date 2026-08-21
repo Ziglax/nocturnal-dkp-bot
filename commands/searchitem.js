@@ -48,6 +48,10 @@ module.exports = {
             return;
         }
         const item = await itemSearch.searchItem(itemId, database);
+        if (!item) {
+            await interaction.editReply({ content: 'No items found', ephemeral: true });
+            return;
+        }
         await logger.sendItemEmbed(interaction, item, false);
     },
 };

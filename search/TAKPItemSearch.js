@@ -12,8 +12,12 @@ module.exports = class TAKPItemSearch {
             return this.searchItemById(search);
         }
 
-        const searchUrl = `https://www.takproject.net/allaclone/items.php?iname=${search}&isearch=Search`;
-        const response = await fetch(searchUrl);
+        const searchUrl = `https://www.takproject.net/allaclone/items.php?iname=${encodeURIComponent(search)}&isearch=Search`;
+        const response = await fetch(searchUrl, { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) {
+            console.error('[takp] item search failed', response.status, searchUrl);
+            return null;
+        }
         const data = await response.text();
 
         if (data.includes('search-item-list')) {
@@ -21,8 +25,8 @@ module.exports = class TAKPItemSearch {
         }
 
         if (data.includes('item-info')) {
-            const url = response.url;
-            const id = url.split('=')[1];
+            const url = response.url || searchUrl;
+            const id = url.split('=')[1] || '';
 
             return this.processItem(data, id, url);
         }
@@ -53,6 +57,12 @@ module.exports = class TAKPItemSearch {
     processItem(html, id = '', searchUrl = '') {
         const dom = new JSDOM(html);
         const itemStats = dom.window.document.querySelector('.item-stats');
+        const itemNameElement = dom.window.document.querySelector('.item-info > strong');
+        const itemImageElement = dom.window.document.querySelector('.item-info img');
+        if (!itemStats || !itemNameElement) {
+            console.error('[takp] unexpected item markup for item', id);
+            return null;
+        }
         const itemStatsHtml = itemStats.innerHTML;
         // replace all br tags with newlines
         let itemStatsText = itemStatsHtml.replace(/<br>/g, '\n');
@@ -66,9 +76,9 @@ module.exports = class TAKPItemSearch {
 
         const item = {
             id: id.toString(),
-            name: dom.window.document.querySelector('.item-info > strong').textContent,
+            name: itemNameElement.textContent,
             data: itemStatsText,
-            image: dom.window.document.querySelector('.item-info img').src,
+            image: itemImageElement?.src || '',
             url: searchUrl
         };
 
@@ -76,8 +86,12 @@ module.exports = class TAKPItemSearch {
     }
 
     async searchItemById(id) {
-        const searchUrl = `https://www.takproject.net/allaclone/item.php?id=${id}`;
-        const response = await fetch(searchUrl);
+        const searchUrl = `https://www.takproject.net/allaclone/item.php?id=${encodeURIComponent(id)}`;
+        const response = await fetch(searchUrl, { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) {
+            console.error('[takp] item fetch failed', response.status, searchUrl);
+            return null;
+        }
         const data = await response.text();
 
         if (data.includes('item-info')) {

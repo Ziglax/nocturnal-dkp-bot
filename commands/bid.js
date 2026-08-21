@@ -17,8 +17,8 @@ module.exports = {
         if (bidForMain === null) {
             bidForMain = true;
         }
-        const player = await manager.getPlayer(guild, interaction.user.id);
         try {
+            const player = await manager.getPlayer(guild, interaction.user.id);
             const auction = await manager.getAuction(guild, auctionId);
             if (process.env.LOG_LEVEL === 'DEBUG') {
                 log(`Executed command bid`, {

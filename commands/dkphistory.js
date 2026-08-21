@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
 const uniqid = require('uniqid');
+const { guardListener } = require('../utils/safe.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -16,7 +17,7 @@ module.exports = {
         let ticks = 0;
         const log = player.log.sort((a, b) => b.date - a.date)
             .map((e, index, entries) => {
-                if (e.comment === 'Tick' && entries[index + 1]?.comment == 'Tick' && entries[index + 1]?.raid._id.toString() === e.raid._id.toString()) {
+                if (e.comment === 'Tick' && entries[index + 1]?.comment == 'Tick' && entries[index + 1]?.raid?._id?.toString() === e.raid?._id?.toString()) {
                     ticks++;
                     raid = e.raid;
                     return;
@@ -50,9 +51,10 @@ module.exports = {
 
         await interaction.editReply({ embeds: [embed], ephemeral: true, components: [row] });
 
+        if (!interaction.channel) return;
         const collectorFilter = i => i.user.id === interaction.user.id && i.customId.endsWith(id);
         const collector = interaction.channel.createMessageComponentCollector({ time: 120_000, filter: collectorFilter });
-        collector.on('collect', async i => {
+        collector.on('collect', guardListener('dkphistory collect', async i => {
             await i.deferUpdate();
             if (i.customId.startsWith('previousPage')) {
                 currentPage--;
@@ -64,14 +66,14 @@ module.exports = {
             embed.description = log.slice(currentPage * entriesPerPage, (currentPage + 1) * entriesPerPage).join('\n');
             embed.footer.text = `${currentPage + 1}/${pages}`;
             await interaction.editReply({ embeds: [embed], components: [row] });
-        });
+        }));
 
         collector.on('end', async () => {
             previousPageButton.setDisabled(true);
             nextPageButton.setDisabled(true);
             await interaction.editReply({
                 components: [row]
-            });
+            }).catch(() => {});
         });
     },
 }; 

@@ -12,9 +12,16 @@ module.exports = class QUARMItemSearch {
             return this.searchItemById(search);
         }
 
-        const searchUrl = `https://www.pqdi.cc/api/v1/items?name=${search}`;
-        const response = await fetch(searchUrl);
-        const data = await response.json();
+        const searchUrl = `https://www.pqdi.cc/api/v1/items?name=${encodeURIComponent(search)}`;
+        const response = await fetch(searchUrl, { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) {
+            console.error('[quarm] item search failed', response.status, searchUrl);
+            return null;
+        }
+        const data = await response.json().catch(() => null);
+        if (!data) {
+            return null;
+        }
 
         if (data.items && data.items.length > 1) {
             return data.items;
@@ -30,8 +37,8 @@ module.exports = class QUARMItemSearch {
 
     //function to extract the icon number from the title attribute like: title="Icon 1234"
     extractIconNumber(element) {
-        const title = element.getAttribute('title');
-        const iconNumber = title.split(' ')[1];
+        const title = element?.getAttribute('title') || '';
+        const iconNumber = title.split(' ')[1] || '';
         return iconNumber;
     }
 
@@ -39,8 +46,13 @@ module.exports = class QUARMItemSearch {
         const dom = new JSDOM(html);
         const itemStats = dom.window.document.querySelector('table');
         const itemIconElement = dom.window.document.querySelector('.item-icon');
+        const itemNameElement = dom.window.document.querySelector('h4');
+        if (!itemStats || !itemNameElement) {
+            console.error('[quarm] unexpected tooltip markup for item', id);
+            return null;
+        }
         const iconNumber = this.extractIconNumber(itemIconElement);
-        const itemName = dom.window.document.querySelector('h4').textContent;
+        const itemName = itemNameElement.textContent;
 
         let itemStatsHtml = itemStats.innerHTML;
         //remove item name from stats
@@ -71,11 +83,15 @@ module.exports = class QUARMItemSearch {
     }
 
     async searchItemById(id) {
-        const searchUrl = `https://www.pqdi.cc/get-item-tooltip/${id}`;
-        const response = await fetch(searchUrl);
+        const searchUrl = `https://www.pqdi.cc/get-item-tooltip/${encodeURIComponent(id)}`;
+        const response = await fetch(searchUrl, { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) {
+            console.error('[quarm] item tooltip fetch failed', response.status, searchUrl);
+            return null;
+        }
         const data = await response.text();
 
-        if (data.includes('table')) {
+        if (data.includes('<table')) {
             return this.processItem(data, id);
         }
 
