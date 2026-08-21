@@ -1,0 +1,55 @@
+services:
+  dkp-bot:
+    build: .
+    # Explicit tag: without it, compose names the built image <project>-<service>
+    # ("dkp-bot-dkp-bot"), which reads oddly in container UIs.
+    image: dkp-bot:latest
+    container_name: dkp-bot
+    restart: unless-stopped
+    # PID-1 init reaps zombies and forwards SIGTERM (node ignores it as PID 1,
+    # so without this every stop/restart hangs 10s before SIGKILL).
+    init: true
+    # MONGO_URL in .env must use the compose service name: mongodb://mongo:27017
+    # (localhost inside the container is the container itself).
+    env_file: .env
+    depends_on:
+      mongo:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      # Source code, configs, ./backups, ./error.log — live from the host.
+      # - Code changes:       `docker compose restart dkp-bot`
+      # - .env changes:       `docker compose up -d` (restart keeps creation-time env)
+      # - Dependency changes: `docker compose up -d --build -V`
+      #   (-V renews the anonymous node_modules volume, which otherwise survives
+      #   rebuilds; never use `down -v` — it also wipes the mongo-data volume)
+      - ./:/app
+      # Anonymous volume preserves the image's node_modules instead of letting the
+      # host bind-mount mask it (host has no node_modules, and native deps such as
+      # @snazzah/davey / ffmpeg-static differ between the host OS and Debian).
+      - /app/node_modules
+
+  mongo:
+    image: mongo:7
+    container_name: dkp-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  mongo-data:

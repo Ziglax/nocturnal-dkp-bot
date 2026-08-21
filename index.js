@@ -1,18 +1,26 @@
 const fs = require('node:fs');
 const path = require('node:path');
 require('dotenv').config()
-const { Client, Events, GatewayIntentBits, Collection, REST, Routes } = require('discord.js');
+const { Client, Events, GatewayIntentBits, Collection, REST, Routes, PermissionFlagsBits } = require('discord.js');
 const DKPManager = require('./DKPManager/DKPManager.js');
 const Worker = require('./worker/Worker.js');
 const Logger = require('./utils/Logger');
 const Auctioner = require('./Auctioner/Auctioner.js');
 
-const dbClient = require('./db.js');
-try {
-	dbClient.connect();
-} catch (error) {
-	console.error(error);
+for (const key of ['DISCORD_TOKEN', 'DISCORD_CLIENT_ID', 'MONGO_URL']) {
+	if (!process.env[key]) {
+		console.error(`Missing required env var ${key}`);
+		process.exit(1);
+	}
 }
+
+const dbClient = require('./db.js');
+// connect() is async: exit on rejection so the restart policy retries with a
+// clear error instead of an unhandled-rejection crash 30s later.
+dbClient.connect().catch((error) => {
+	console.error(error);
+	process.exit(1);
+});
 
 const log = require('./debugger.js');
 
@@ -60,7 +68,10 @@ client.on(Events.InteractionCreate, async interaction => {
 	}
 
 	try {
-		if (command.restricted) {
+		// Guild administrators bypass the officer-role check: the role lives in the
+		// guild config, which /configure (itself restricted) must be able to create
+		// while the database is still empty.
+		if (command.restricted && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
 			const guildConfig = await dkpManager.getGuildOptions(interaction.guild.id);
 			if (!guildConfig || !interaction.member.roles.cache.has(guildConfig.adminRole)) {
 				interaction.reply(`You don't have the permission to use this command`);

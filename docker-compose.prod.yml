@@ -1,0 +1,39 @@
+# Stack de production : le bot seul, sans conteneur MongoDB.
+# La base de prod est hébergée sur MongoDB Atlas (free tier) — MONGO_URL dans
+# .env doit contenir l'URI Atlas complète (mongodb+srv://user:mdp@cluster...),
+# reprise telle quelle du .env de la prod actuelle.
+#
+# Attention au parseur env_file de docker compose : si le mot de passe contient
+# un $, doublez-le ($$) sinon compose tente une interpolation de variable.
+#
+# Lancement : sudo docker compose -f docker-compose.prod.yml up -d --build
+services:
+  dkp-bot:
+    build: .
+    # Explicit tag: without it, compose names the built image <project>-<service>
+    # ("dkp-bot-dkp-bot"), which reads oddly in container UIs.
+    image: dkp-bot:latest
+    container_name: dkp-bot
+    restart: unless-stopped
+    # PID-1 init reaps zombies and forwards SIGTERM (node ignores it as PID 1,
+    # so without this every stop/restart hangs 10s before SIGKILL).
+    init: true
+    env_file: .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      # Source code, configs, ./backups, ./error.log — live from the host.
+      # - Code changes:       `docker compose -f docker-compose.prod.yml restart dkp-bot`
+      # - .env changes:       `docker compose -f docker-compose.prod.yml up -d`
+      #                       (restart keeps creation-time env)
+      # - Dependency changes: `docker compose -f docker-compose.prod.yml up -d --build -V`
+      #   (-V renews the anonymous node_modules volume, which otherwise
+      #   survives rebuilds)
+      - ./:/app
+      # Anonymous volume preserves the image's node_modules instead of letting the
+      # host bind-mount mask it (host has no node_modules, and native deps such as
+      # @snazzah/davey / ffmpeg-static differ between the host OS and Debian).
+      - /app/node_modules
