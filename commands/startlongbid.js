@@ -1,8 +1,9 @@
-const { SlashCommandBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType } = require('discord.js');
+const { SlashCommandBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, MessageFlags } = require('discord.js');
 const ItemSearch = require('../search/ItemSearch');
 const Auctioner = require('../Auctioner/Auctioner');
 const { playSound } = require('../utils/Player.js');
 const client = require('../db');
+const { safeAck, safeReply } = require('../utils/safe.js');
 
 const itemSearch = new ItemSearch();
 
@@ -39,24 +40,24 @@ module.exports = {
         const database = interaction.options.getString('database') || 'quarm';
 
         if (database !== 'quarm' && database !== 'takp') {
-            interaction.editReply({ content: 'Invalid database option. Must be quarm or takp', ephemeral: true });
+            await interaction.editReply({ content: 'Invalid database option. Must be quarm or takp', ephemeral: true });
             return;
         }
 
         const items = await itemSearch.searchItem(search, database);
 
         if (!items) {
-            interaction.editReply({ content: 'No items found', ephemeral: true });
+            await interaction.editReply({ content: 'No items found', ephemeral: true });
             return;
         }
 
         if (items.length && items.length > 40) {
-            interaction.editReply({ content: `List too long (${items.length}), refine search`, ephemeral: true });
+            await interaction.editReply({ content: `List too long (${items.length}), refine search`, ephemeral: true });
             return;
         }
 
         if (items.length && items.length > 25) {
-            interaction.editReply({ embeds: [logger.itemsToEmbededList(items)], ephemeral: true });
+            await interaction.editReply({ embeds: [logger.itemsToEmbededList(items)], ephemeral: true });
             return;
         }
 
@@ -71,24 +72,39 @@ module.exports = {
             item = await itemSearch.searchItem(itemId, database);
         }
 
+        if (!item) {
+            await interaction.editReply({ content: 'No items found', ephemeral: true });
+            return;
+        }
+
         const startAuctionMessage = await logger.sendItemEmbed(interaction, item, true);
         const collectorFilter = i => i.user.id === interaction.user.id;
         const collector = startAuctionMessage.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30_000, filter: collectorFilter });
         collector.on('collect', async i => {
-            if (i.customId.startsWith(`startbid_`)) {
-                await i.update({
-                    content: `Bid started`,
-                    embeds: [],
-                    components: [],
-                    ephemeral: false
-                });
-                collector.stop();
+            try {
+                if (i.customId.startsWith(`startbid_`)) {
+                    if (!(await safeAck(i))) return;
+                    await interaction.editReply({
+                        content: `Bid started`,
+                        embeds: [],
+                        components: []
+                    });
+                    collector.stop();
 
-                const duration = hours * 60 * 60 * 1000;
-                //guild, item, minBid, numberOfItems, minBidToLockForMain, overBidtoWinMain, duration = 48
-                const auction = await manager.createAution(guild.id, item, minBid, numberOfItems, guildConfig.minBidToLockForMain, guildConfig.overBidtoWinMain, duration);
-                const messageId = await logger.sendLongAuctionEmbed(guildConfig, auction, minBid, numberOfItems);
-                await manager.updateAuctionMessageId(guild.id, auction._id, messageId);
+                    const duration = hours * 60 * 60 * 1000;
+                    //guild, item, minBid, numberOfItems, minBidToLockForMain, overBidtoWinMain, duration = 48
+                    const auction = await manager.createAution(guild.id, item, minBid, numberOfItems, guildConfig.minBidToLockForMain, guildConfig.overBidtoWinMain, duration);
+                    const messageId = await logger.sendLongAuctionEmbed(guildConfig, auction, minBid, numberOfItems);
+                    if (messageId) {
+                        await manager.updateAuctionMessageId(guild.id, auction._id, messageId);
+                    } else {
+                        console.error('startlongbid: auction embed not posted (no long auction channel?)', guild.id, auction._id);
+                        await safeReply(interaction, { content: 'Auction created but its embed could not be posted: check the long auction channel configuration.', flags: MessageFlags.Ephemeral });
+                    }
+                }
+            } catch (error) {
+                console.error('startlongbid collect failed', error);
+                await safeReply(interaction, { content: 'Failed to start the bid.', flags: MessageFlags.Ephemeral });
             }
         });
     },

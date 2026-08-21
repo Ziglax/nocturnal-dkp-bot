@@ -1,6 +1,7 @@
-const { ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType } = require('discord.js');
+const { ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, MessageFlags } = require('discord.js');
 const Auctioner = require('../Auctioner/Auctioner');
 const uniqid = require('uniqid');
+const { safeReply, safeAck, guardListener } = require('./safe.js');
 
 //list of discord colors
 const colors = {
@@ -46,72 +47,87 @@ module.exports = class Logger {
     }
 
     async sendRaidEmebed(guildOptions, raid, playersInChannel, color, title, dkps = null) {
-        const discordGuild = await this.client.guilds.fetch(guildOptions.guild);
-        const logChannel = discordGuild.channels.cache.get(guildOptions.logChannel);
-
-        if (!logChannel) {
-            return;
-        }
-
-        let players = await Promise.all(playersInChannel.map(async p => {
-            const player = await discordGuild.members.fetch(p);
-            return `- ${player.nickname || player.user.globalName || player.user.username}`;
-        }));
-
-        players = players.sort();
-
-        const totalPlayers = players.length;
-        const playerFields = this.playerChunks(`Players (${totalPlayers})`, players);
-
         try {
-            await logChannel
-                .send({
-                    embeds: [{
-                        color: color,
-                        title,
-                        fields: [
-                            { name: "Time", value: `<t:${Math.floor(new Date().getTime() / 1000)}:t>`, inline: true },
-                            { name: "DKPs", value: dkps || raid.dkpsPerTick, inline: true },
-                            { name: '\u200B', value: '\u200B' },
-                            ...playerFields,
-                        ],
-                    }]
-                })
-        } catch (e) {
-            logChannel.send(':prohibited: ' + e);
+            const discordGuild = await this.client.guilds.fetch(guildOptions.guild);
+            const logChannel = discordGuild.channels.cache.get(guildOptions.logChannel);
+
+            if (!logChannel) {
+                return;
+            }
+
+            let players = (await Promise.all(playersInChannel.map(async p => {
+                const player = await discordGuild.members.fetch(p).catch(() => null);
+                if (!player) {
+                    return null;
+                }
+                return `- ${player.nickname || player.user.globalName || player.user.username}`;
+            }))).filter(Boolean);
+
+            players = players.sort();
+
+            const totalPlayers = players.length;
+            const playerFields = this.playerChunks(`Players (${totalPlayers})`, players);
+
+            try {
+                await logChannel
+                    .send({
+                        embeds: [{
+                            color: color,
+                            title,
+                            fields: [
+                                { name: "Time", value: `<t:${Math.floor(new Date().getTime() / 1000)}:t>`, inline: true },
+                                { name: "DKPs", value: dkps || raid.dkpsPerTick, inline: true },
+                                { name: '\u200B', value: '\u200B' },
+                                ...playerFields,
+                            ],
+                        }]
+                    })
+            } catch (e) {
+                logChannel.send(':prohibited: ' + e).catch(err => console.error('[sendRaidEmebed] fallback send failed', err));
+            }
+        } catch (error) {
+            console.error('[sendRaidEmebed]', error);
         }
     }
 
     async sendRaidEndEmbed(guildOptions, raid, log) {
-        const discordGuild = await this.client.guilds.fetch(guildOptions.guild);
-        const logChannel = discordGuild.channels.cache.get(guildOptions.logChannel);
+        try {
+            const discordGuild = await this.client.guilds.fetch(guildOptions.guild);
+            const logChannel = discordGuild.channels.cache.get(guildOptions.logChannel);
 
-        if (!logChannel) {
-            return;
-        }
-        const now = new Date().getTime();
+            if (!logChannel) {
+                return;
+            }
+            const now = new Date().getTime();
 
-        const maxLogChunkSize = 35;
-        const logChunks = [];
-        while (log.length) {
-            logChunks.push(log.splice(0, maxLogChunkSize));
-        }
+            const maxLogChunkSize = 35;
+            const logChunks = [];
+            while (log.length) {
+                logChunks.push(log.splice(0, maxLogChunkSize));
+            }
 
-        for (const logChunk of logChunks) {
-            const logIndex = logChunks.indexOf(logChunk);
-            const title = `${raid.name} raid ended - *${logIndex + 1} of ${logChunks.length}*`;
-            await logChannel
-                .send({
-                    embeds: [{
-                        color: 15277667,
-                        title: title,
-                        description: logChunk.join('\n'),
-                        fields: [
-                            { name: "Date", value: `<t:${Math.floor(now / 1000)}:d> <t:${Math.floor(now / 1000)}:t>`, inline: true },
-                            { name: "ID", value: raid._id, inline: true },
-                        ]
-                    }]
-                })
+            for (const logChunk of logChunks) {
+                const logIndex = logChunks.indexOf(logChunk);
+                const title = `${raid.name} raid ended - *${logIndex + 1} of ${logChunks.length}*`;
+                try {
+                    await logChannel
+                        .send({
+                            embeds: [{
+                                color: 15277667,
+                                title: title,
+                                description: logChunk.join('\n').slice(0, 4096),
+                                fields: [
+                                    { name: "Date", value: `<t:${Math.floor(now / 1000)}:d> <t:${Math.floor(now / 1000)}:t>`, inline: true },
+                                    { name: "ID", value: raid._id, inline: true },
+                                ]
+                            }]
+                        })
+                } catch (e) {
+                    console.error('[sendRaidEndEmbed] chunk send failed', logIndex + 1, e);
+                }
+            }
+        } catch (error) {
+            console.error('[sendRaidEndEmbed]', error);
         }
     }
 
@@ -157,24 +173,38 @@ module.exports = class Logger {
         });
 
         const rows = this.itemsToButtonRows(items);
-        await interaction.editReply({
-            content: 'Search Results',
-            components: [...rows],
-            ephemeral: forAuction
-        });
+        try {
+            await interaction.editReply({
+                content: 'Search Results',
+                components: [...rows],
+                ephemeral: forAuction
+            });
+        } catch (error) {
+            console.error('[itemsSearchToEmbed] editReply failed', error);
+            resolve();
+            return result;
+        }
+
+        if (!interaction.channel) {
+            console.error('[itemsSearchToEmbed] no channel on interaction');
+            resolve();
+            return result;
+        }
 
         const collectorFilter = i => i.user.id === interaction.user.id;
         const collector = interaction.channel.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30_000, filter: collectorFilter });
-        collector.on('collect', async i => {
+        collector.on('collect', guardListener('itemsSearchToEmbed collect', async i => {
             if (i.customId.startsWith('selectitem_')) {
                 const itemId = i.customId.split('_')[1];
                 resolve(itemId);
+                i.deferUpdate().catch(() => {});
+                collector.stop();
             }
-        });
+        }));
 
         collector.on('end', async (_collected, reason) => {
             if (reason === 'time') {
-                await interaction.editReply({ content: 'Time out', components: [] });
+                await interaction.editReply({ content: 'Time out', components: [] }).catch(() => {});
                 resolve()
             }
         });
@@ -185,6 +215,10 @@ module.exports = class Logger {
     async sendLongAuctionEmbed(guildOptions, auction, minBid = 0, numberOfItems = 1) {
         const discordGuild = await this.client.guilds.fetch(guildOptions.guild);
         const channel = discordGuild.channels.cache.get(guildOptions.longAuctionChannel || guildOptions.auctionChannel);
+        if (!channel) {
+            console.error('[sendLongAuctionEmbed] no long auction channel configured for guild', guildOptions.guild);
+            return;
+        }
 
         let durationInMiliseconds = auction.auctionEnd - new Date().getTime();
         if (durationInMiliseconds < 0) {
@@ -291,9 +325,17 @@ module.exports = class Logger {
         })
 
         const collector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: bidTime * 1000 });
-        collector.on('collect', async i => {
+        // DM prompts opened from the bid buttons, all stopped when the auction collector ends
+        // (a single listener for all of them, so raid-sized bidder counts never trip MaxListeners).
+        const dmCollectors = new Set();
+        collector.once('end', () => {
+            for (const dmCollector of dmCollectors) {
+                dmCollector.stop();
+            }
+        });
+        collector.on('collect', guardListener('auction buttons', async i => {
             if (i.customId.startsWith('bid_')) {
-                i.deferUpdate();
+                await safeAck(i);
                 const forMain = !i.customId.startsWith('bid_alt');
                 const user = i.user.id;
                 let dmChannel;
@@ -303,42 +345,58 @@ module.exports = class Logger {
                         content: `How much do you want to ${forMain ? '`MAIN`' : '`ALT`'} bid on ${auction.item.name}?, 0 to cancel`,
                     });
                 } catch (e) {
-                    await i.reply({ content: 'Failed to send DM', ephemeral: true });
+                    // The button was already acknowledged with deferUpdate, so a follow-up is the
+                    // only way to answer the user without overwriting the public auction message.
+                    console.error('[auction buttons] could not DM bidder', user, e?.code || '', e?.message || e);
+                    await i.followUp({ content: 'Failed to send DM, please open your DMs to bid.', flags: MessageFlags.Ephemeral }).catch(() => {});
                     return;
                 }
 
                 const dmCollector = dmChannel.createMessageCollector({ time: 60000, filter: m => m.author.id === user });
-                dmCollector.on('collect', async m => {
+                dmCollector.on('collect', guardListener('auction dm', async m => {
                     const amount = parseInt(m.content);
+                    if (Number.isNaN(amount)) {
+                        await dmChannel.send('Please send a number, 0 to cancel').catch(() => {});
+                        return;
+                    }
                     if (amount === 0) {
-                        await dmChannel.send('Bid cancelled');
+                        await dmChannel.send('Bid cancelled').catch(() => {});
                         dmCollector.stop();
                         return;
                     }
                     try {
                         await Auctioner.instance.bid(guildOptions.guild, auction.id, amount, user, forMain);
-                        await dmChannel.send('Bid placed');
+                        await dmChannel.send('Bid placed').catch(() => {});
                         dmCollector.stop();
                     } catch (e) {
-                        await dmChannel.send(e.message);
+                        await dmChannel.send(e.message).catch(() => {});
                     }
-                });
+                }));
+
+                // Don't let a DM prompt outlive the auction it belongs to.
+                dmCollectors.add(dmCollector);
+                dmCollector.once('end', () => dmCollectors.delete(dmCollector));
             }
 
             if (i.customId.startsWith('cancel_')) {
-                if (!i.member.roles.cache.has(officerRole)) {
-                    i.reply({ content: ':Prohibited: You dont have permissions, what do you want your tombstone to say?', ephemeral: true });
+                if (!i.member?.roles?.cache?.has(officerRole)) {
+                    await safeReply(i, { content: ':Prohibited: You dont have permissions, what do you want your tombstone to say?', flags: MessageFlags.Ephemeral });
                     return;
                 }
-                i.deferUpdate();
-                await Auctioner.instance.cancelAuction(auction.id);
+                await safeAck(i);
+                const cancelled = await Auctioner.instance.cancelAuction(auction.id);
+                if (!cancelled) {
+                    // Auction already closed (or closing) through its timer: the deferUpdate above is a silent no-op,
+                    // and the winners embed posted by the close callback must not be overwritten.
+                    return;
+                }
                 cancelButton.setDisabled(true);
                 cancelButton.setLabel('Auction Cancelled');
                 const row = new ActionRowBuilder().addComponents(cancelButton);
-                message.edit({ embeds: [{ ...embed, color: colors.red }], components: [row] });
+                await message.edit({ embeds: [{ ...embed, color: colors.red }], components: [row] }).catch(e => console.error('[auction buttons] cancel edit failed', e));
                 collector.stop();
             }
-        })
+        }))
 
         return message;
     }
@@ -391,7 +449,7 @@ module.exports = class Logger {
             title: item.name + ' #' + item.id,
             description: separator + item.data,
             url: item.url,
-            thumbnail: { url: item.image },
+            ...(item.image ? { thumbnail: { url: item.image } } : {}),
         }
     }
 }

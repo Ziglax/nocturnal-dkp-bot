@@ -1,8 +1,9 @@
-const { SlashCommandBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType } = require('discord.js');
+const { SlashCommandBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, MessageFlags } = require('discord.js');
 const ItemSearch = require('../search/ItemSearch');
 const Auctioner = require('../Auctioner/Auctioner');
 const { playSound } = require('../utils/Player.js');
 const log = require('../debugger.js');
+const { safeAck, safeReply } = require('../utils/safe.js');
 
 const itemSearch = new ItemSearch();
 
@@ -39,24 +40,24 @@ module.exports = {
         const database = interaction.options.getString('database') || 'quarm';
 
         if (database !== 'quarm' && database !== 'takp') {
-            interaction.editReply({ content: 'Invalid database option. Must be quarm or takp', ephemeral: true });
+            await interaction.editReply({ content: 'Invalid database option. Must be quarm or takp', ephemeral: true });
             return;
         }
 
         const items = await itemSearch.searchItem(search, database);
 
         if (!items) {
-            interaction.editReply({ content: 'No items found', ephemeral: true });
+            await interaction.editReply({ content: 'No items found', ephemeral: true });
             return;
         }
 
         if (items.length && items.length > 40) {
-            interaction.editReply({ content: `List too long (${items.length}), refine search`, ephemeral: true });
+            await interaction.editReply({ content: `List too long (${items.length}), refine search`, ephemeral: true });
             return;
         }
 
         if (items.length && items.length > 25) {
-            interaction.editReply({ embeds: [logger.itemsToEmbededList(items)], ephemeral: true });
+            await interaction.editReply({ embeds: [logger.itemsToEmbededList(items)], ephemeral: true });
             return;
         }
 
@@ -71,116 +72,158 @@ module.exports = {
             item = await itemSearch.searchItem(itemId, database);
         }
 
+        if (!item) {
+            await interaction.editReply({ content: 'No items found', ephemeral: true });
+            return;
+        }
+
         const startAuctionMessage = await logger.sendItemEmbed(interaction, item, true);
 
         const collectorFilter = i => i.user.id === interaction.user.id;
         const collector = startAuctionMessage.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30_000, filter: collectorFilter });
         collector.on('collect', async i => {
-            if (i.customId.startsWith(`startbid_`)) {
-                const officerRole = guildConfig.adminRole;
-                await i.update({
-                    content: `Bid started`,
-                    embeds: [],
-                    components: [],
-                    ephemeral: false
-                });
-                collector.stop();
-
-                let message;
-                const callback = async (auction) => {
-                    const embed = logger.itemToEmbed(auction.item, 5763719);
-                    const row = new ActionRowBuilder();
-                    const confirmButton = new ButtonBuilder().setCustomId('confirm_' + auction.id).setLabel('Confirm Winner/s').setStyle(ButtonStyle.Primary);
-                    row.addComponents(confirmButton);
-                    embed.fields = [
-                        { name: 'Winner/s', value: winnerMessage(auction) },
-                        { name: 'Bids', value: auction.bids.sort((a, b) => b.amount - a.amount).map(bid => `- ${bid.amount}${bid.bidForMain ? '' : ' - alter'}`).join('\n') },
-                        {
-                            name: 'Auction ID',
-                            value: "```" + auction._id + "```",
-                        },
-                    ];
-
-                    await message.edit({
-                        embeds: [embed],
-                        components: auction.winner || auction.winners.length ? [row] : []
+            try {
+                if (i.customId.startsWith(`startbid_`)) {
+                    const officerRole = guildConfig.adminRole;
+                    if (!(await safeAck(i))) return;
+                    await interaction.editReply({
+                        content: `Bid started`,
+                        embeds: [],
+                        components: []
                     });
+                    collector.stop();
 
-                    if (auction.winner || auction.winners.length > 0) {
-                        const collectorFilter = i => i.user.id === interaction.user.id; //|| i.member.roles.cache.has(officerRole);
-                        const confirmWinCollector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: 360_000, filter: collectorFilter });
-                        confirmWinCollector.on('collect', async i => {
-                            if (i.customId.startsWith('confirm_' + auction.id)) {
-                                confirmWinCollector.stop();
-                                confirmButton.setDisabled(true);
-                                confirmButton.setLabel('Winner/s Confirmed').setStyle(ButtonStyle.Success);
-                                await i.update({
-                                    components: [row]
+                    let message;
+                    const callback = async (auction) => {
+                        if (!message) {
+                            console.error('auction ended before message existed', auction.id);
+                            return;
+                        }
+                        try {
+                            const embed = logger.itemToEmbed(auction.item, 5763719);
+                            const row = new ActionRowBuilder();
+                            const confirmButton = new ButtonBuilder().setCustomId('confirm_' + auction.id).setLabel('Confirm Winner/s').setStyle(ButtonStyle.Primary);
+                            row.addComponents(confirmButton);
+                            embed.fields = [
+                                { name: 'Winner/s', value: winnerMessage(auction) },
+                                { name: 'Bids', value: auction.bids.sort((a, b) => b.amount - a.amount).map(bid => `- ${bid.amount}${bid.bidForMain ? '' : ' - alter'}`).join('\n') },
+                                {
+                                    name: 'Auction ID',
+                                    value: "```" + auction._id + "```",
+                                },
+                            ];
+
+                            await message.edit({
+                                embeds: [embed],
+                                components: auction.winner || auction.winners.length ? [row] : []
+                            });
+
+                            if (auction.winner || auction.winners.length > 0) {
+                                const collectorFilter = i => i.user.id === interaction.user.id; //|| i.member.roles.cache.has(officerRole);
+                                const confirmWinCollector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: 360_000, filter: collectorFilter });
+                                confirmWinCollector.on('collect', async i => {
+                                    let current = null; // winner being debited, for the failure log
+                                    try {
+                                        if (i.customId.startsWith('confirm_' + auction.id)) {
+                                            confirmWinCollector.stop();
+                                            confirmButton.setDisabled(true);
+                                            confirmButton.setLabel('Winner/s Confirmed').setStyle(ButtonStyle.Success);
+                                            await safeAck(i);
+                                            await message.edit({
+                                                components: [row]
+                                            }).catch(e => console.error(e));
+
+                                            const raid = await manager.getActiveRaid(guild.id);
+                                            if (auction.winner) {
+                                                current = auction.winner;
+                                                await manager.removeDKP(guild.id, auction.winner.player, auction.winner.amount, auction.item.name, raid, auction.item);
+                                                if (process.env.LOG_LEVEL === 'DEBUG') {
+                                                    log('Removing dkps from winer', {
+                                                        player: auction.winner.player,
+                                                        amount: auction.winner.amount,
+                                                        item: auction.item.name
+                                                    });
+                                                }
+                                            }
+                                            else {
+                                                for (const winner of auction.winners) {
+                                                    current = winner;
+                                                    await manager.removeDKP(guild.id, winner.player, winner.amount, auction.item.name, raid, auction.item);
+                                                    if (process.env.LOG_LEVEL === 'DEBUG') {
+                                                        log('Removing dkps from winer', {
+                                                            player: winner.player,
+                                                            amount: winner.amount,
+                                                            item: auction.item.name
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (error) {
+                                        console.error('confirm winners failed', auction.id, current ? `while debiting ${current.player} (${current.amount} DKP)` : '(before any debit)', error);
+                                        // Keep the button disabled so a re-click cannot double-debit winners already written.
+                                        confirmButton.setLabel('Confirm failed - see logs').setStyle(ButtonStyle.Danger);
+                                        await message.edit({
+                                            content: 'Failed to remove DKP from winner/s, check the logs.',
+                                            components: [row]
+                                        }).catch(e => console.error(e));
+                                    }
                                 });
 
-                                const raid = await manager.getActiveRaid(guild.id);
-                                if (auction.winner) {
-                                    await manager.removeDKP(guild.id, auction.winner.player, auction.winner.amount, auction.item.name, raid, auction.item);
-                                    if (process.env.LOG_LEVEL === 'DEBUG') {
-                                        log('Removing dkps from winer', {
-                                            player: auction.winner.player,
-                                            amount: auction.winner.amount,
-                                            item: auction.item.name
-                                        });
-                                    }
-                                }
-                                else {
-                                    auction.winners.forEach(async winner => {
-                                        await manager.removeDKP(guild.id, winner.player, winner.amount, auction.item.name, raid, auction.item);
-                                        if (process.env.LOG_LEVEL === 'DEBUG') {
-                                            log('Removing dkps from winer', {
-                                                player: winner.player,
-                                                amount: winner.amount,
-                                                item: auction.item.name
+                                confirmWinCollector.on('end', async (_collected, reason) => {
+                                    confirmButton.setDisabled(true);
+                                    if (reason === 'time') {
+                                        confirmButton.setLabel('Time for confirmation ended').setStyle(ButtonStyle.Success);
+                                        try {
+                                            await message.edit({
+                                                components: [row]
                                             });
                                         }
-                                    });
-                                }
+                                        catch (e) {
+                                            console.log(e);
+                                        }
+                                    }
+                                });
                             }
-                        });
+                        } catch (error) {
+                            console.error('auction end callback failed', auction?.id, error);
+                        }
+                    };
 
-                        confirmWinCollector.on('end', async (_collected, reason) => {
-                            confirmButton.setDisabled(true);
-                            if (reason === 'time') {
-                                confirmButton.setLabel('Time for confirmation ended').setStyle(ButtonStyle.Success);
-                                try {
-                                    await message.edit({
-                                        components: [row]
-                                    });
-                                }
-                                catch (e) {
-                                    console.log(e);
-                                }
-                            }
-                        });
+                    const bidTime = guildConfig.bidTime;
+                    const startedAuction = await Auctioner.instance.startAuction(
+                        item,
+                        guild.id,
+                        callback,
+                        {
+                            minBid,
+                            duration: bidTime * 1000,
+                            numberOfItems,
+                            minBidToLockForMain: guildConfig.minBidToLockForMain,
+                            overBidtoWinMain: guildConfig.overBidtoWinMain,
+                            checkAttendance: false
+                        }
+                    );
+                    message = await logger.sendAuctionStartEmbed(guildConfig, startedAuction, minBid, numberOfItems);
+
+                    if (raidChannel) {
+                        try {
+                            await playSound(guild, raidChannel, '../assets/bell.mp3');
+                        } catch (e) {
+                            console.error('bell failed', e);
+                        }
                     }
-                };
-
-                const bidTime = guildConfig.bidTime;
-                const startedAuction = await Auctioner.instance.startAuction(
-                    item,
-                    guild.id,
-                    callback,
-                    {
-                        minBid,
-                        duration: bidTime * 1000,
-                        numberOfItems,
-                        minBidToLockForMain: guildConfig.minBidToLockForMain,
-                        overBidtoWinMain: guildConfig.overBidtoWinMain,
-                        checkAttendance: false
+                    if (secondRaidChannel) {
+                        try {
+                            await playSound(guild, secondRaidChannel, '../assets/bell.mp3');
+                        } catch (e) {
+                            console.error('bell failed', e);
+                        }
                     }
-                );
-                message = await logger.sendAuctionStartEmbed(guildConfig, startedAuction, minBid, numberOfItems);
-
-                await playSound(guild, raidChannel, '../assets/bell.mp3');
-                if (secondRaidChannel) {
-                    await playSound(guild, secondRaidChannel, '../assets/bell.mp3');
                 }
+            } catch (error) {
+                console.error('startbid collect failed', error);
+                await safeReply(interaction, { content: 'Failed to start the bid.', flags: MessageFlags.Ephemeral });
             }
         });
     },

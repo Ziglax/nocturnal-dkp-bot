@@ -31,22 +31,29 @@ class Auctioner {
             if (!auction.auctionActive) {
                 return;
             }
-            const players = await Promise.all(auction.bids.map(async bid => await this.dkpManager.getPlayer(guild, bid.player, checkAttendance)));
-            auction.endAuction();
-            auction.calculateWinner(players);
+            try {
+                const players = this.dkpManager
+                    ? await Promise.all(auction.bids.map(bid => this.dkpManager.getPlayer(guild, bid.player, checkAttendance)))
+                    : [];
+                auction.endAuction();
+                auction.calculateWinner(players);
 
-            // Store the short auction in the database when it ends
-            if (this.dkpManager) {
-                try {
-                    const storedAuction = await this.dkpManager.storeShortAuction(guild, auction);
-                    auction._id = storedAuction._id;
-                } catch (error) {
-                    console.error('Failed to store short auction in database:', error);
+                // Store the short auction in the database when it ends
+                if (this.dkpManager) {
+                    try {
+                        const storedAuction = await this.dkpManager.storeShortAuction(guild, auction);
+                        auction._id = storedAuction._id;
+                    } catch (error) {
+                        console.error('Failed to store short auction in database:', error);
+                    }
                 }
-            }
 
-            callback(auction);
-            this.removeAuction(auction.id);
+                await callback(auction);
+            } catch (error) {
+                console.error('[auctioner] auction close failed', auction.id, error);
+            } finally {
+                this.removeAuction(auction.id);
+            }
         }, duration);
 
         return auction;
@@ -54,8 +61,12 @@ class Auctioner {
 
     async cancelAuction(auctionId) {
         const auction = this.getAuction(auctionId);
+        if (!auction || !auction.auctionActive) {
+            return false;
+        }
         auction.endAuction();
         this.removeAuction(auctionId);
+        return true;
     }
 
     removeAuction(auctionId) {
