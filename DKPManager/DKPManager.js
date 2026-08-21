@@ -352,7 +352,7 @@ module.exports = class DKPManager {
         }
 
         if (amount < auction.minBid) {
-            throw new Error(`DKP - Bot scowls at you. Bid amount is less than the minimum bid (${this.minBid})`);
+            throw new Error(`DKP - Bot scowls at you. Bid amount is less than the minimum bid (${auction.minBid})`);
         }
 
         //auction contains player bid

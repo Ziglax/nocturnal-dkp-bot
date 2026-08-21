@@ -31,13 +31,15 @@ module.exports = {
         const auctionChannel = interaction.options.getChannel('auctionchannel');
         const longAuctionChannel = interaction.options.getChannel('longauctionchannel');
         const role = interaction.options.getRole('role');
-        const raidDeprecationTime = interaction.options.getNumber('raiddeprecationtime') * 86400000 || guildConfig.raidDeprecationTime || 90;
+        const rdtDays = interaction.options.getNumber('raiddeprecationtime');
+        const raidDeprecationTime = rdtDays != null ? rdtDays * 86400000 : (guildConfig.raidDeprecationTime ?? 90 * 86400000);
         const bidTime = interaction.options.getInteger('bidtime') || guildConfig.bidTime || 60;
         const minBid = interaction.options.getInteger('minbid') || guildConfig.minBid || 0;
         const minBidToLockForMain = interaction.options.getInteger('minbidtolockformain') || guildConfig.minBidToLockForMain;
         const overBidtoWinMain = interaction.options.getInteger('overbidtowinmain') || guildConfig.overBidtoWinMain;
         const raidHelperAPIKey = interaction.options.getString('raidhelperapikey') || guildConfig.raidHelperAPIKey;
-        const tickDuration = interaction.options.getNumber('tickduration') * 60000 || guildConfig.tickDuration;
+        const tickMinutes = interaction.options.getNumber('tickduration');
+        const tickDuration = tickMinutes != null ? tickMinutes * 60000 : guildConfig.tickDuration;
         await manager.saveGuildOptions(guild, {
             raidChannel: raidChannel.id,
             adminRole: role.id,
