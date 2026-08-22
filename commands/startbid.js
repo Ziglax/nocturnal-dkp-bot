@@ -238,8 +238,11 @@ module.exports = {
                     }
                 }
             } catch (error) {
-                // Safe: after collector.stop() no further click can be collected, so
-                // this can only re-open the window for a failure that created nothing.
+                // The latch only guards the early-return paths above: by the time
+                // anything past collector.stop() can throw, no further click can be
+                // collected, so releasing it here cannot let a second auction through.
+                // It does not mean nothing was created -- a throw after the auction
+                // exists leaves it live, which the message below does not say.
                 starting = false;
                 console.error('startbid collect failed', error);
                 await safeReply(interaction, { content: 'Failed to start the bid.', flags: MessageFlags.Ephemeral });
