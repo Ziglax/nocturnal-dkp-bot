@@ -29,7 +29,7 @@ module.exports = {
         .addIntegerOption(option => option.setName('duration').setDescription('Hours of bid').setRequired(false))
         .addStringOption(option => option.setName('database').setDescription('quarm | takp').setRequired(false)),
     async execute(interaction, manager, logger) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const guild = interaction.guild;
         const guildConfig = await manager.getGuildOptions(interaction.guild.id) || {};
         const search = interaction.options.getString('search');
@@ -40,24 +40,24 @@ module.exports = {
         const database = interaction.options.getString('database') || 'quarm';
 
         if (database !== 'quarm' && database !== 'takp') {
-            await interaction.editReply({ content: 'Invalid database option. Must be quarm or takp', ephemeral: true });
+            await interaction.editReply({ content: 'Invalid database option. Must be quarm or takp' });
             return;
         }
 
         const items = await itemSearch.searchItem(search, database);
 
         if (!items) {
-            await interaction.editReply({ content: 'No items found', ephemeral: true });
+            await interaction.editReply({ content: 'No items found' });
             return;
         }
 
         if (items.length && items.length > 40) {
-            await interaction.editReply({ content: `List too long (${items.length}), refine search`, ephemeral: true });
+            await interaction.editReply({ content: `List too long (${items.length}), refine search` });
             return;
         }
 
         if (items.length && items.length > 25) {
-            await interaction.editReply({ embeds: [logger.itemsToEmbededList(items)], ephemeral: true });
+            await interaction.editReply({ embeds: [logger.itemsToEmbededList(items)] });
             return;
         }
 
@@ -73,17 +73,33 @@ module.exports = {
         }
 
         if (!item) {
-            await interaction.editReply({ content: 'No items found', ephemeral: true });
+            await interaction.editReply({ content: 'No items found' });
             return;
         }
 
         const startAuctionMessage = await logger.sendItemEmbed(interaction, item, true);
         const collectorFilter = i => i.user.id === interaction.user.id;
+        // Set synchronously, before the first await: two clicks on Start Auction
+        // land as two collect events before collector.stop() runs, which used to
+        // create two auctions for the same item (and two overlapping bells).
+        let starting = false;
         const collector = startAuctionMessage.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30_000, filter: collectorFilter });
         collector.on('collect', async i => {
             try {
                 if (i.customId.startsWith(`startbid_`)) {
-                    if (!(await safeAck(i))) return;
+                    if (starting) {
+                        // Acknowledge the click we are dropping, otherwise Discord
+                        // shows the officer a red "This interaction failed".
+                        await safeAck(i);
+                        return;
+                    }
+                    starting = true;
+                    // Released on every path that stops before collector.stop(): those
+                    // never created an auction, so the officer must be able to retry.
+                    if (!(await safeAck(i))) {
+                        starting = false;
+                        return;
+                    }
                     await interaction.editReply({
                         content: `Bid started`,
                         embeds: [],
@@ -103,6 +119,9 @@ module.exports = {
                     }
                 }
             } catch (error) {
+                // Safe: after collector.stop() no further click can be collected, so
+                // this can only re-open the window for a failure that created nothing.
+                starting = false;
                 console.error('startlongbid collect failed', error);
                 await safeReply(interaction, { content: 'Failed to start the bid.', flags: MessageFlags.Ephemeral });
             }
