@@ -1,12 +1,12 @@
-# Stack de production : le bot seul, sans conteneur MongoDB.
-# La base de prod est hébergée sur MongoDB Atlas (free tier) — MONGO_URL dans
-# .env doit contenir l'URI Atlas complète (mongodb+srv://user:mdp@cluster...),
-# reprise telle quelle du .env de la prod actuelle.
+# Production stack: the bot alone, with no MongoDB container.
+# The production database lives on MongoDB Atlas (free tier), so MONGO_URL in
+# .env must hold the full Atlas URI (mongodb+srv://user:password@cluster...),
+# carried over as-is from the current production .env.
 #
-# Attention au parseur env_file de docker compose : si le mot de passe contient
-# un $, doublez-le ($$) sinon compose tente une interpolation de variable.
+# Mind the docker compose env_file parser: if the password contains a $, double
+# it ($$) or compose will try to interpolate it as a variable.
 #
-# Lancement : sudo docker compose -f docker-compose.prod.yml up -d --build
+# Run it: sudo docker compose -f docker-compose.prod.yml up -d --build
 services:
   dkp-bot:
     build: .
