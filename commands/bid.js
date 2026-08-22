@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const log = require('../debugger.js');
 
 module.exports = {
@@ -9,7 +9,7 @@ module.exports = {
         .addIntegerOption(option => option.setName('dkps').setDescription('The ammount of dkps').setRequired(true))
         .addBooleanOption(option => option.setName('bidformain').setDescription('Bid for main').setRequired(false)),
     async execute(interaction, manager) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const guild = interaction.guild.id;
         const auctionId = interaction.options.getString('auctionid');
         const dkps = interaction.options.getInteger('dkps');
@@ -29,14 +29,14 @@ module.exports = {
             }
             if (dkps === 0) {
                 await manager.removeBid(guild, auctionId, player);
-                await interaction.editReply({ content: `Removed bid on ${auction.item.name}`, ephemeral: true });
+                await interaction.editReply({ content: `Removed bid on ${auction.item.name}` });
                 return;
             }
             await manager.bid(guild, auctionId, dkps, player, bidForMain);
-            await interaction.editReply({ content: `Bid ${dkps} DKPs as ${bidForMain ? 'MAIN' : 'ALT'}  on ${auction.item.name} `, ephemeral: true });
+            await interaction.editReply({ content: `Bid ${dkps} DKPs as ${bidForMain ? 'MAIN' : 'ALT'}  on ${auction.item.name} ` });
         }
         catch (err) {
-            await interaction.editReply({ content: err.message, ephemeral: true });
+            await interaction.editReply({ content: err.message });
         }
     },
     restricted: false,

@@ -14,7 +14,7 @@ module.exports = {
         const search = interaction.options.getString('search');
         const database = interaction.options.getString('database') || 'quarm';
         if (database !== 'quarm' && database !== 'takp') {
-            interaction.editReply({ content: 'Invalid database option. Must be quarm or takp', ephemeral: true });
+            await interaction.editReply({ content: 'Invalid database option. Must be quarm or takp' });
             return;
         }
 
@@ -29,12 +29,12 @@ module.exports = {
         const items = await itemSearch.searchItem(search, database);
 
         if (!items) {
-            interaction.editReply({ content: 'No items found', ephemeral: true });
+            await interaction.editReply({ content: 'No items found' });
             return;
         }
 
         if (items.length && items.length > 25) {
-            interaction.editReply({ embeds: [logger.itemsToEmbededList(items, database)], ephemeral: true });
+            await interaction.editReply({ embeds: [logger.itemsToEmbededList(items, database)] });
             return;
         }
 
@@ -49,7 +49,7 @@ module.exports = {
         }
         const item = await itemSearch.searchItem(itemId, database);
         if (!item) {
-            await interaction.editReply({ content: 'No items found', ephemeral: true });
+            await interaction.editReply({ content: 'No items found' });
             return;
         }
         await logger.sendItemEmbed(interaction, item, false);

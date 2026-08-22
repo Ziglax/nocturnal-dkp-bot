@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { processRaidHelperEventDKP } = require('../utils/raidHelperUtils');
 const log = require('../debugger.js');
 
@@ -10,7 +10,7 @@ module.exports = {
         .addStringOption(option => option.setName('raidid').setDescription('Raid ID').setRequired(true))
         .addStringOption(option => option.setName('eventid').setDescription('Event ID').setRequired(true)),
     async execute(interaction, manager, logger) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const guild = interaction.guild.id;
         const dkp = interaction.options.getInteger('dkp');
         const raidid = interaction.options.getString('raidid');
@@ -32,8 +32,7 @@ module.exports = {
             });
 
             await interaction.editReply({
-                content: `Adding ${dkp} DKP to players that subscribed and attended raid event: ${result.event.title}`,
-                ephemeral: true
+                content: `Adding ${dkp} DKP to players that subscribed and attended raid event: ${result.event.title}`
             });
         } catch (error) {
             console.error('Error processing RaidHelper event DKP:', error);
@@ -42,8 +41,7 @@ module.exports = {
                 log('Error processing RaidHelper event DKP:', error);
             }
             await interaction.editReply({
-                content: `:prohibited: ${error.message}`,
-                ephemeral: true
+                content: `:prohibited: ${error.message}`
             });
         }
     },

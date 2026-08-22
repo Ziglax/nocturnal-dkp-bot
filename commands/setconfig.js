@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits, ChannelType } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -24,7 +24,7 @@ module.exports = {
         const raidChannel = interaction.options.getChannel('raidchannel');
         const secondRaidChannel = interaction.options.getChannel('secondraidchannel');
         if (raidChannel.id === secondRaidChannel?.id) {
-            return interaction.reply({ content: ':prohibited: Raid channel and second raid channel must be different', ephemeral: true });
+            return interaction.reply({ content: ':prohibited: Raid channel and second raid channel must be different', flags: MessageFlags.Ephemeral });
         }
 
         const logChannel = interaction.options.getChannel('logchannel');
@@ -56,7 +56,7 @@ module.exports = {
             tickDuration,
         });
 
-        await interaction.reply({ content: 'Configuration saved', ephemeral: true });
+        await interaction.reply({ content: 'Configuration saved', flags: MessageFlags.Ephemeral });
     },
     restricted: true,
 };

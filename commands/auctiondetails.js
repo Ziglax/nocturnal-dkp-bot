@@ -1,5 +1,5 @@
 require('dotenv').config()
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const log = require('../debugger.js');
 
 module.exports = {
@@ -8,7 +8,7 @@ module.exports = {
         .setDescription('Show the details of an auction')
         .addStringOption(option => option.setName('auctionid').setDescription('The auction id').setRequired(true)),
     async execute(interaction, manager) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const guild = interaction.guild.id;
         const auctionid = interaction.options.getString('auctionid');
         const guildConfig = await manager.getGuildOptions(interaction.guild.id) || {};
@@ -36,7 +36,7 @@ module.exports = {
         auction.winners.forEach(winner => {
             message += `- <@${winner.player}> - ${winner.amount} - ${winner.bidForMain ? 'MAIN' : 'ALT'}\n`;
         });
-        await interaction.editReply(message, { ephemeral: true });
+        await interaction.editReply(message);
     },
     restricted: true,
 };

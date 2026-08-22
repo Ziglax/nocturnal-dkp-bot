@@ -1,6 +1,6 @@
 require('dotenv').config()
 const uniqid = require('uniqid');
-const { SlashCommandBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
 const { guardListener } = require('../utils/safe.js');
 
 module.exports = {
@@ -10,7 +10,7 @@ module.exports = {
         .addStringOption(option => option.setName('search').setDescription('Search term').setRequired(true)),
     async execute(interaction, manager) {
         //defer interaction to prevent timeout
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const guild = interaction.guild.id;
         const search = interaction.options.getString('search');
 
@@ -18,12 +18,12 @@ module.exports = {
         const regex = new RegExp(/tick/i);
         const isSearchingForTick = regex.test(search);
         if (isSearchingForTick) {
-            return interaction.editReply({ content: 'DKP - bot scowls at you. What do you want your tombstone to say?', ephemeral: true });
+            return interaction.editReply({ content: 'DKP - bot scowls at you. What do you want your tombstone to say?' });
         }
 
         const logs = await manager.searchLogs(guild, search);
         if (logs.length === 0) {
-            return interaction.editReply({ content: 'No logs found', ephemeral: true });
+            return interaction.editReply({ content: 'No logs found' });
         }
 
         const entriesPerPage = 20;
@@ -38,7 +38,7 @@ module.exports = {
         try {
             usersInLog = await interaction.guild.members.fetch({ user: logs.map(log => log.player) });
         } catch (e) {
-            await interaction.editReply({ content: 'Error fetching members', ephemeral: true });
+            await interaction.editReply({ content: 'Error fetching members' });
             return;
         }
 
@@ -55,7 +55,7 @@ module.exports = {
             },
         };
 
-        await interaction.editReply({ embeds: [logsEmbed], components: [row], ephemeral: true });
+        await interaction.editReply({ embeds: [logsEmbed], components: [row] });
 
         if (!interaction.channel) return;
         const collectorFilter = i => i.user.id === interaction.user.id && i.customId.endsWith(id);
@@ -84,7 +84,7 @@ module.exports = {
         collector.on('end', async () => {
             previousPageButton.setDisabled(true);
             nextPageButton.setDisabled(true);
-            await interaction.editReply({ embeds: [logsEmbed], components: [row], ephemeral: true }).catch(() => {});
+            await interaction.editReply({ embeds: [logsEmbed], components: [row] }).catch(() => {});
         });
     },
     restricted: false,

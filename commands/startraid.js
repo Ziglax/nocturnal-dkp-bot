@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -37,7 +37,7 @@ module.exports = {
         }
 
         if (!raidChannel) {
-            await interaction.reply({ content: ':prohibited: Raid channel not set, use /configure to set it', ephemeral: true });
+            await interaction.reply({ content: ':prohibited: Raid channel not set, use /configure to set it', flags: MessageFlags.Ephemeral });
             return;
         }
 
@@ -53,7 +53,7 @@ module.exports = {
 
         const alreadyActiveRaid = await manager.getActiveRaid(guild);
         if (alreadyActiveRaid) {
-            await interaction.reply({ content: `:prohibited: There is already an active raid: ${alreadyActiveRaid.name}`, ephemeral: true });
+            await interaction.reply({ content: `:prohibited: There is already an active raid: ${alreadyActiveRaid.name}`, flags: MessageFlags.Ephemeral });
             return;
         }
 
@@ -74,7 +74,7 @@ module.exports = {
         manager.addRaidAttendance(guild, raid, [...playersInChannel, ...playersInSecondChannel], comment, dkpsPerTick);
 
         const minutes = tickDuration / 60000;
-        await interaction.reply({ content: `Raid ${name} started with ${dkpsPerTick} DKP per tick every ${minutes} minutes`, ephemeral: true }
+        await interaction.reply({ content: `Raid ${name} started with ${dkpsPerTick} DKP per tick every ${minutes} minutes`, flags: MessageFlags.Ephemeral }
         );
 
         logger.sendRaidEmebed(guildConfig, raid, [...playersInChannel, ...playersInSecondChannel], 5763719, `${name} raid Start`);
