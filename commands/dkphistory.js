@@ -37,6 +37,14 @@ module.exports = {
                 }
                 return `- <t:${Math.floor(e.date / 1000)}:d>  **${e.dkp}**${e.raid ? ` *${e.raid.name}* ` : ' '} ${e.item ? `${e.item.name}` : `*${e.comment}*`}`;
             }).filter(e => e);
+        // A player document with an empty log used to be impossible: it was only
+        // ever created by addDKP/removeDKP, which push an entry in the same upsert.
+        // /registercharacter can create one now, and editReply({ content: '' }) on a
+        // deferred reply with nothing else in it is rejected by Discord (50006).
+        if (log.length === 0) {
+            await interaction.editReply({ content: `:prohibited: ${user.username} has no DKP history yet` });
+            return;
+        }
         if (log.length < entriesPerPage) {
             await interaction.editReply({ content: log.join('\n') });
             return;
