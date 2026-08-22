@@ -1,5 +1,5 @@
 require('dotenv').config()
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -19,7 +19,11 @@ module.exports = {
             await interaction.reply(`Successfully registered ${name}!`);
         }
         catch (e) {
-            await interaction.reply(`Error: ${e}`);
+            console.error('[registercharacter]', e);
+            await interaction.reply({
+                content: `:prohibited: ${e?.message || 'Could not register that character, try again in a moment.'}`,
+                flags: MessageFlags.Ephemeral,
+            });
         }
     },
 };

@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
 const uniqid = require('uniqid');
 const { guardListener } = require('../utils/safe.js');
 
@@ -8,14 +8,21 @@ module.exports = {
         .setDescription('Shows the DKP history of a player')
         .addUserOption(option => option.setName('player').setDescription('The player').setRequired(false)),
     async execute(interaction, manager) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const guild = interaction.guild.id;
         const user = interaction.options.getUser('player') || interaction.user;
         const entriesPerPage = 30;
 
-        const player = await manager.getPlayer(guild, user.id);
+        const player = await manager.getPlayer(guild, user.id).catch((error) => {
+            if (error?.message === 'Player not found') return null;
+            throw error;
+        });
+        if (!player) {
+            await interaction.editReply({ content: `:prohibited: ${user.username} has no DKP record yet` });
+            return;
+        }
         let ticks = 0;
-        const log = player.log.sort((a, b) => b.date - a.date)
+        const log = (player.log || []).sort((a, b) => b.date - a.date)
             .map((e, index, entries) => {
                 if (e.comment === 'Tick' && entries[index + 1]?.comment == 'Tick' && entries[index + 1]?.raid?._id?.toString() === e.raid?._id?.toString()) {
                     ticks++;
@@ -31,7 +38,7 @@ module.exports = {
                 return `- <t:${Math.floor(e.date / 1000)}:d>  **${e.dkp}**${e.raid ? ` *${e.raid.name}* ` : ' '} ${e.item ? `${e.item.name}` : `*${e.comment}*`}`;
             }).filter(e => e);
         if (log.length < entriesPerPage) {
-            await interaction.editReply({ content: log.join('\n'), ephemeral: true });
+            await interaction.editReply({ content: log.join('\n') });
             return;
         }
 
@@ -49,7 +56,7 @@ module.exports = {
             },
         };
 
-        await interaction.editReply({ embeds: [embed], ephemeral: true, components: [row] });
+        await interaction.editReply({ embeds: [embed], components: [row] });
 
         if (!interaction.channel) return;
         const collectorFilter = i => i.user.id === interaction.user.id && i.customId.endsWith(id);

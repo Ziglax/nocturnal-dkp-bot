@@ -1,5 +1,5 @@
 require('dotenv').config()
-const { SlashCommandBuilder, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
 const uniqid = require('uniqid');
 const log = require('../debugger.js');
 const { guardListener } = require('../utils/safe.js');
@@ -9,7 +9,7 @@ module.exports = {
         .setName('listplayersdkps')
         .setDescription('List all players and their current DKP'),
     async execute(interaction, manager, logger) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const guildConfig = await manager.getGuildOptions(interaction.guild.id) || {}
 
         if (process.env.LOG_LEVEL === 'DEBUG') {
@@ -20,7 +20,7 @@ module.exports = {
         const guild = interaction.guild.id;
         const alreadyActiveRaid = await manager.getActiveRaid(guild);
         if (alreadyActiveRaid) {
-            await interaction.editReply({ content: `:prohibited: DKP Bot scowls at you. This command is forbiden during raids.`, ephemeral: true });
+            await interaction.editReply({ content: `:prohibited: DKP Bot scowls at you. This command is forbiden during raids.` });
             return;
         }
         let currentPage = 0;
@@ -28,12 +28,18 @@ module.exports = {
         let { players, total } = await manager.listPlayers(guild, currentPage, pageSize, guildConfig.raidDeprecationTime);
 
         if (total === 0) {
-            await interaction.editReply({ content: ':prohibited: No players found', ephemeral: true });
+            await interaction.editReply({ content: ':prohibited: No players found' });
             return;
         }
 
         const totalPages = Math.ceil(total / pageSize);
-        const currentPlayer = await manager.getPlayer(guild, interaction.user.id);
+        // Whoever runs this may never have registered a character, and getPlayer()
+        // throws instead of returning null. The list itself is still worth showing:
+        // only the caller's own line at the bottom is dropped.
+        const currentPlayer = await manager.getPlayer(guild, interaction.user.id).catch((error) => {
+            if (error?.message === 'Player not found') return null;
+            throw error;
+        });
 
         const embed = logger.playerListToEmbed(players, currentPlayer, currentPage, pageSize);
         embed.author = {
@@ -50,8 +56,7 @@ module.exports = {
 
         const message = await interaction.editReply({
             embeds: [embed],
-            components: [row],
-            ephemeral: true
+            components: [row]
         })
 
         const collectorFilter = i => i.user.id === interaction.user.id && i.customId.endsWith(id);

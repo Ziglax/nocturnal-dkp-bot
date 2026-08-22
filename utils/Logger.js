@@ -159,8 +159,7 @@ module.exports = class Logger {
         row.addComponents(button);
         return interaction.editReply({
             embeds: [this.itemToEmbed(item)],
-            components: forAuction ? [row] : [],
-            ephemeral: forAuction
+            components: forAuction ? [row] : []
         });
     }
 
@@ -176,8 +175,7 @@ module.exports = class Logger {
         try {
             await interaction.editReply({
                 content: 'Search Results',
-                components: [...rows],
-                ephemeral: forAuction
+                components: [...rows]
             });
         } catch (error) {
             console.error('[itemsSearchToEmbed] editReply failed', error);
@@ -205,8 +203,11 @@ module.exports = class Logger {
         collector.on('end', async (_collected, reason) => {
             if (reason === 'time') {
                 await interaction.editReply({ content: 'Time out', components: [] }).catch(() => {});
-                resolve()
             }
+            // Every other end reason (message or channel deleted, collector stopped)
+            // must settle too: the caller awaits this before answering the command,
+            // so a pending promise leaves the user on "thinking..." for good.
+            resolve();
         });
 
         return result;
@@ -416,9 +417,15 @@ module.exports = class Logger {
             return '| `' + row.current.toString().padStart(6, ' ') + ' ` |' + space.repeat(5) + '`' + attendance.padStart(4, ' ').padEnd(5, ' ').padStart(6, ' ') + '`' + space.repeat(5) + '|';
         });
 
-        const currentPlayerName = '| `' + currentPlayer.position.toString().padStart(2, ' ') + '`: <@' + currentPlayer.player + '>';
-        const currentPlayerAttendance = currentPlayer.attendance + '%';
-        const currentPlayerData = '| `' + currentPlayer.current.toString().padStart(6, ' ') + ' ` |' + space.repeat(5) + '`' + currentPlayerAttendance.padStart(4, ' ').padEnd(5, ' ').padStart(6, ' ') + '`' + space.repeat(5) + '|';
+        // Trailing block: the caller's own row, repeated under the page. A caller
+        // with no DKP record simply does not get one.
+        const currentPlayerAttendance = currentPlayer ? currentPlayer.attendance + '%' : '';
+        const currentPlayerBlock = currentPlayer
+            ? separatorLine + '| `' + currentPlayer.position.toString().padStart(2, ' ') + '`: <@' + currentPlayer.player + '>' + separatorLine
+            : '';
+        const currentPlayerDataBlock = currentPlayer
+            ? separatorLine2 + '| `' + currentPlayer.current.toString().padStart(6, ' ') + ' ` |' + space.repeat(5) + '`' + currentPlayerAttendance.padStart(4, ' ').padEnd(5, ' ').padStart(6, ' ') + '`' + space.repeat(5) + '|' + separatorLine2
+            : '';
 
         const columnOneHeader = '| # | **Player Name**' + separatorLine;
         const columnTwoHeader = '| ' + space.repeat(5) + '**DKP** ' + space.repeat(5) + '| **Attendance** |' + separatorLine2;
@@ -428,12 +435,12 @@ module.exports = class Logger {
             fields: [
                 {
                     name: '\u200B',
-                    value: columnOneHeader + playerNames.join(separatorLine) + separatorLine + separatorLine + currentPlayerName + separatorLine,
+                    value: columnOneHeader + playerNames.join(separatorLine) + separatorLine + currentPlayerBlock,
                     inline: true
                 },
                 {
                     name: '\u200B',
-                    value: columnTwoHeader + playerData.join(separatorLine2) + separatorLine2 + separatorLine2 + currentPlayerData + separatorLine2,
+                    value: columnTwoHeader + playerData.join(separatorLine2) + separatorLine2 + currentPlayerDataBlock,
                     inline: true
                 }
             ]

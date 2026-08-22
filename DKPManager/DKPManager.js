@@ -250,7 +250,21 @@ module.exports = class DKPManager {
             throw new Error(`Character ${character} already registered`);
         }
 
-        return this.players.findOneAndUpdate({ player, guild, characters: { $nin: [character] } }, { $push: { characters: character } });
+        // Without upsert this matched nothing for a member who has no player
+        // document yet (addDKP/removeDKP create theirs on the fly, this one did
+        // not), so the character was dropped while the command still answered
+        // "Successfully registered". Filtering on player+guild only, so the
+        // upsert can never insert a second document for the same player; the
+        // $nin it replaces is already covered by the check above, and $addToSet
+        // keeps re-registering one's own character a no-op.
+        return this.players.findOneAndUpdate(
+            { player, guild },
+            {
+                $addToSet: { characters: character },
+                $setOnInsert: { creationDate: new Date().getTime(), current: 0, log: [] },
+            },
+            { upsert: true },
+        );
     }
 
     async saveGuildOptions(guild, options) {

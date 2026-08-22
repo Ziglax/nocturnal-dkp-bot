@@ -40,7 +40,8 @@ module.exports = {
             //send files as .zip	
             await interaction.editReply({ content: `Backup created ${new Date().toLocaleString()}`, files: [{ attachment: zipFile, name: 'backup.zip' }] });
         } catch (error) {
-            await interaction.editReply({ content: `Error creating backup ${error}`, ephemeral: true });
+            console.error('[backup]', error);
+            await interaction.editReply({ content: ':prohibited: Backup failed, check the bot log.' });
         }
     },
 };
