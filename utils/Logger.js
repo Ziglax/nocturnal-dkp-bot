@@ -328,9 +328,13 @@ module.exports = class Logger {
         const collector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: bidTime * 1000 });
         // DM prompts opened from the bid buttons, all stopped when the auction collector ends
         // (a single listener for all of them, so raid-sized bidder counts never trip MaxListeners).
-        const dmCollectors = new Set();
+        // Keyed by bidder: a second click must replace the first prompt, not run beside it.
+        // Two live collectors on the same DM channel both read the same message, so
+        // "I want to bid" then "Bid for Alter" then "50" used to register the bid twice
+        // and the losing race decided whether it counted as MAIN or ALT.
+        const dmCollectors = new Map();
         collector.once('end', () => {
-            for (const dmCollector of dmCollectors) {
+            for (const dmCollector of dmCollectors.values()) {
                 dmCollector.stop();
             }
         });
@@ -382,9 +386,16 @@ module.exports = class Logger {
                     }
                 }));
 
-                // Don't let a DM prompt outlive the auction it belongs to.
-                dmCollectors.add(dmCollector);
-                dmCollector.once('end', () => dmCollectors.delete(dmCollector));
+                // Don't let a DM prompt outlive the auction it belongs to, and never let a
+                // bidder hold two at once. The identity check keeps the superseded
+                // collector's own 'end' from deleting its replacement.
+                dmCollectors.get(user)?.stop();
+                dmCollectors.set(user, dmCollector);
+                dmCollector.once('end', () => {
+                    if (dmCollectors.get(user) === dmCollector) {
+                        dmCollectors.delete(user);
+                    }
+                });
             }
 
             if (i.customId.startsWith('cancel_')) {
