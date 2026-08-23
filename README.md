@@ -27,6 +27,7 @@ This is a fork of the `dkpbot` written by Alberto Casado Torres, hardened for 24
   - [Option B — Synology NAS (Container Manager)](#option-b--synology-nas-container-manager)
   - [Option C — Bot only, MongoDB Atlas](#option-c--bot-only-mongodb-atlas)
   - [Option D — Bare metal](#option-d--bare-metal)
+  - [Migrating to an OVH VPS](#migrating-to-an-ovh-vps)
   - [Updating](#updating)
   - [Slash command registration](#slash-command-registration)
   - [Logs](#logs)
@@ -237,6 +238,10 @@ node index.js
 
 There is no `npm start` script. Use a supervisor that restarts the process (pm2, systemd, a Pterodactyl *nodejs* egg…) — the bot exits on purpose when the token or the database is unavailable at startup.
 
+### Migrating to an OVH VPS
+
+[**docs/ovh-migration.md**](docs/ovh-migration.md) is a full runbook for moving off a split hosting (bot on a game panel, database on an Atlas free cluster) onto a single OVH VPS running Option A's stack: which options to pick when ordering, how to harden the machine, how to copy the production database over with `mongodump`, the cutover sequence and its rollback, how to set up real backups, and how to make a sanitised copy of production for local development ([`tools/scrub-dev.js`](tools/scrub-dev.js)).
+
 ### Updating
 
 | Change | Docker Compose | Bare metal |
@@ -282,6 +287,7 @@ The bot uses the `DKP` database with the collections `players`, `raids`, `option
   `--nsInclude='DKP.*'` and not `--db DKP`: `--db` is deprecated on archive input, is silently rewritten, and cannot rename (`--db DKP_NEW` restores zero documents and reports no error). `--drop` and `--stopOnError` are not optional — `mongorestore` inserts only, so without `--drop` a document whose `_id` already exists is skipped, and by default the run continues past duplicate-key errors and still exits 0.
 
   Never pass `-t` to `docker exec` around a dump or a restore: the TTY turns `\n` into `\r\n` and corrupts the archive. Dump takes no flags, restore over stdin takes `-i` alone.
+- Atlas **free** clusters have no snapshots and no restore facility — Atlas's own documentation points free-tier users at `mongodump`/`mongorestore`, which is the reason for [Migrating to an OVH VPS](docs/ovh-migration.md).
 
 ### Tests
 
