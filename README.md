@@ -43,7 +43,7 @@ This is a fork of the `dkpbot` written by Alberto Casado Torres, hardened for 24
 
 **Auctions.** Two flavours:
 
-- **Short auction** (`/startbid`) — lives in memory for `bidtime` seconds. The bot posts the item in the auction channel with *I want to bid* / *Bid for Alter* / *Cancel* buttons and rings a bell in the raid channel(s). Bidders receive a DM asking for their amount. At the end the winners are announced and the officer who started it presses **Confirm Winner/s** (within 6 minutes) to debit the DKP.
+- **Short auction** (`/startbid`) — lives in memory for `bidtime` seconds. The bot posts the item in the auction channel with *Main bid* / *Alt bid* / *Cancel* buttons and rings a bell in the raid channel(s). Bidders receive a DM asking for their amount; sending **0** withdraws their bid. At the end the winners are announced and the officer who started it presses **Confirm Winner/s** (within 6 minutes) to debit the DKP.
 - **Long auction** (`/startlongbid`) — stored in the database, runs for N hours. Players bid with `/bid` until the end time; the bot closes it about 20 minutes later and edits the original auction post with the winners and their bids (no new message, nobody is pinged). At close every bid is re-checked against the bidder's balance at that moment: a bid the player can no longer cover (e.g. after winning a short auction meanwhile) is dropped silently. **DKP is not debited automatically** — use `/removedkp`.
 
 Main vs alt bids: a bid flagged *main* only counts as main if it reaches `minbidtolockformain`; an alt bid can still beat main bids when it exceeds the highest main bid by `overbidtowinmain`. Main bids win first, alt bids fill the remaining items; equal bids are split at random.

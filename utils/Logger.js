@@ -306,8 +306,8 @@ module.exports = class Logger {
 
         const auctionEndTimestamp = Math.floor(new Date().getTime() / 1000) + bidTime;
 
-        const button = new ButtonBuilder().setCustomId('bid_' + auction.id).setLabel('I want to bid').setStyle(ButtonStyle.Primary);
-        const buttonAlt = new ButtonBuilder().setCustomId('bid_alt' + auction.id).setLabel('Bid for Alter').setStyle(ButtonStyle.Secondary)
+        const button = new ButtonBuilder().setCustomId('bid_' + auction.id).setLabel('Main bid').setStyle(ButtonStyle.Primary);
+        const buttonAlt = new ButtonBuilder().setCustomId('bid_alt' + auction.id).setLabel('Alt bid').setStyle(ButtonStyle.Secondary)
         const cancelButton = new ButtonBuilder().setCustomId('cancel_' + auction.id).setLabel('Cancel').setStyle(ButtonStyle.Danger);
         const row = new ActionRowBuilder().addComponents(button, buttonAlt, cancelButton);
 
@@ -330,7 +330,7 @@ module.exports = class Logger {
         // (a single listener for all of them, so raid-sized bidder counts never trip MaxListeners).
         // Keyed by bidder: a second click must replace the first prompt, not run beside it.
         // Two live collectors on the same DM channel both read the same message, so
-        // "I want to bid" then "Bid for Alter" then "50" used to register the bid twice
+        // "Main bid" then "Alt bid" then "50" used to register the bid twice
         // and the losing race decided whether it counted as MAIN or ALT.
         const dmCollectors = new Map();
         collector.once('end', () => {
