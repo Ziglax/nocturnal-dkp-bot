@@ -1,4 +1,4 @@
-const { ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, MessageFlags } = require('discord.js');
+const { ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const Auctioner = require('../Auctioner/Auctioner');
 const uniqid = require('uniqid');
 const { safeReply, safeAck, guardListener } = require('./safe.js');
@@ -326,76 +326,72 @@ module.exports = class Logger {
         })
 
         const collector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: bidTime * 1000 });
-        // DM prompts opened from the bid buttons, all stopped when the auction collector ends
-        // (a single listener for all of them, so raid-sized bidder counts never trip MaxListeners).
-        // Keyed by bidder: a second click must replace the first prompt, not run beside it.
-        // Two live collectors on the same DM channel both read the same message, so
-        // "Main bid" then "Alt bid" then "50" used to register the bid twice
-        // and the losing race decided whether it counted as MAIN or ALT.
-        const dmCollectors = new Map();
-        collector.once('end', () => {
-            for (const dmCollector of dmCollectors.values()) {
-                dmCollector.stop();
-            }
-        });
         collector.on('collect', guardListener('auction buttons', async i => {
             if (i.customId.startsWith('bid_')) {
-                await safeAck(i);
                 const forMain = !i.customId.startsWith('bid_alt');
-                const user = i.user.id;
-                let dmChannel;
+
+                // The amount is collected by a modal rather than by a DM prompt, so it
+                // arrives on an interaction that belongs to this auction and this button.
+                // DM prompts could not tell auctions apart: every live prompt sat on the
+                // same DM channel and MessageCollector only filters on channelId, so one
+                // number typed with two prompts open was registered on both items - and
+                // "0" withdrew from both. The modal also lets players with closed DMs bid.
+                // A fresh id per click keeps two modals from ever answering each other.
+                const modalId = 'bidmodal_' + uniqid();
+                const modal = new ModalBuilder()
+                    .setCustomId(modalId)
+                    .setTitle(`Bid on ${auction.item.name}`.slice(0, 45))
+                    .addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('amount')
+                            .setLabel(`${forMain ? 'MAIN' : 'ALT'} bid amount in DKP`)
+                            .setPlaceholder('Enter 0 to remove your bid')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true)
+                            .setMaxLength(10)
+                    ));
+
                 try {
-                    dmChannel = await discordGuild.members.fetch(user).then(m => m.createDM());
-                    await dmChannel.send({
-                        content: `How much do you want to ${forMain ? '`MAIN`' : '`ALT`'} bid on ${auction.item.name}? Send 0 to remove your bid.`,
-                    });
+                    // A modal must be the first response to the interaction, so this path
+                    // must not defer or acknowledge it beforehand.
+                    await i.showModal(modal);
                 } catch (e) {
-                    // The button was already acknowledged with deferUpdate, so a follow-up is the
-                    // only way to answer the user without overwriting the public auction message.
-                    console.error('[auction buttons] could not DM bidder', user, e?.code || '', e?.message || e);
-                    await i.followUp({ content: 'Failed to send DM, please open your DMs to bid.', flags: MessageFlags.Ephemeral }).catch(() => {});
+                    console.error('[auction buttons] could not open the bid modal', i.user.id, e?.code || '', e?.message || e);
                     return;
                 }
 
-                const dmCollector = dmChannel.createMessageCollector({ time: 60000, filter: m => m.author.id === user });
-                dmCollector.on('collect', guardListener('auction dm', async m => {
-                    const amount = parseInt(m.content);
-                    if (Number.isNaN(amount)) {
-                        await dmChannel.send('Please send a number. Send 0 to remove your bid.').catch(() => {});
-                        return;
-                    }
-                    if (amount === 0) {
-                        // Used to only close this prompt: the bid the player was
-                        // withdrawing stayed in the auction, so "Bid cancelled" was a
-                        // lie and they could still win the item and be debited.
-                        try {
-                            const removed = await Auctioner.instance.removeBid(guildOptions.guild, auction.id, user);
-                            await dmChannel.send(removed ? 'Bid removed' : 'You had no bid to remove').catch(() => {});
-                            dmCollector.stop();
-                        } catch (e) {
-                            await dmChannel.send(e.message).catch(() => {});
-                        }
-                        return;
-                    }
-                    try {
-                        await Auctioner.instance.bid(guildOptions.guild, auction.id, amount, user, forMain);
-                        await dmChannel.send('Bid placed').catch(() => {});
-                        dmCollector.stop();
-                    } catch (e) {
-                        await dmChannel.send(e.message).catch(() => {});
-                    }
-                }));
+                // Bounded by what is left of the auction: an answer that arrives after the
+                // close has nothing to bid on. A dismissed modal rejects here and is not an
+                // error, so it resolves to null and the click is simply dropped.
+                const submitted = await i.awaitModalSubmit({
+                    time: Math.max(5000, Math.min(auctionEndTimestamp * 1000 - Date.now(), 15 * 60 * 1000)),
+                    filter: m => m.customId === modalId && m.user.id === i.user.id,
+                }).catch(() => null);
+                if (!submitted) {
+                    return;
+                }
 
-                // Don't let a DM prompt outlive the auction it belongs to, and never let a
-                // bidder hold two at once. The identity check keeps the superseded
-                // collector's own 'end' from deleting its replacement.
-                dmCollectors.get(user)?.stop();
-                dmCollectors.set(user, dmCollector);
-                dmCollector.once('end', () => {
-                    if (dmCollectors.get(user) === dmCollector) {
-                        dmCollectors.delete(user);
+                const raw = submitted.fields.getTextInputValue('amount').trim();
+                // Deliberately stricter than parseInt, which silently read "50abc" as 50.
+                const amount = /^\d+$/.test(raw) ? parseInt(raw, 10) : NaN;
+                if (Number.isNaN(amount)) {
+                    await safeReply(submitted, { content: `\`${raw}\` is not a number. Bid again with a whole number of DKP, or 0 to remove your bid.`, flags: MessageFlags.Ephemeral });
+                    return;
+                }
+
+                try {
+                    if (amount === 0) {
+                        const removed = await Auctioner.instance.removeBid(guildOptions.guild, auction.id, i.user.id);
+                        await safeReply(submitted, { content: removed ? `Bid removed on **${auction.item.name}**` : `You had no bid to remove on **${auction.item.name}**`, flags: MessageFlags.Ephemeral });
+                        return;
                     }
-                });
+                    await Auctioner.instance.bid(guildOptions.guild, auction.id, amount, i.user.id, forMain);
+                    // Name the item and the side: a bidder juggling several auctions at once
+                    // could not tell which one an unqualified "Bid placed" answered.
+                    await safeReply(submitted, { content: `${forMain ? 'MAIN' : 'ALT'} bid of **${amount} DKP** placed on **${auction.item.name}**`, flags: MessageFlags.Ephemeral });
+                } catch (e) {
+                    await safeReply(submitted, { content: e.message, flags: MessageFlags.Ephemeral });
+                }
             }
 
             if (i.customId.startsWith('cancel_')) {
