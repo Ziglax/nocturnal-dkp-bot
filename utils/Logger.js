@@ -343,7 +343,7 @@ module.exports = class Logger {
                 try {
                     dmChannel = await discordGuild.members.fetch(user).then(m => m.createDM());
                     await dmChannel.send({
-                        content: `How much do you want to ${forMain ? '`MAIN`' : '`ALT`'} bid on ${auction.item.name}?, 0 to cancel`,
+                        content: `How much do you want to ${forMain ? '`MAIN`' : '`ALT`'} bid on ${auction.item.name}? Send 0 to remove your bid.`,
                     });
                 } catch (e) {
                     // The button was already acknowledged with deferUpdate, so a follow-up is the
@@ -357,12 +357,20 @@ module.exports = class Logger {
                 dmCollector.on('collect', guardListener('auction dm', async m => {
                     const amount = parseInt(m.content);
                     if (Number.isNaN(amount)) {
-                        await dmChannel.send('Please send a number, 0 to cancel').catch(() => {});
+                        await dmChannel.send('Please send a number. Send 0 to remove your bid.').catch(() => {});
                         return;
                     }
                     if (amount === 0) {
-                        await dmChannel.send('Bid cancelled').catch(() => {});
-                        dmCollector.stop();
+                        // Used to only close this prompt: the bid the player was
+                        // withdrawing stayed in the auction, so "Bid cancelled" was a
+                        // lie and they could still win the item and be debited.
+                        try {
+                            const removed = await Auctioner.instance.removeBid(guildOptions.guild, auction.id, user);
+                            await dmChannel.send(removed ? 'Bid removed' : 'You had no bid to remove').catch(() => {});
+                            dmCollector.stop();
+                        } catch (e) {
+                            await dmChannel.send(e.message).catch(() => {});
+                        }
                         return;
                     }
                     try {

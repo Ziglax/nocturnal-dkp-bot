@@ -85,6 +85,20 @@ class Auctioner {
         const playerData = await this.dkpManager.getPlayer(guild, player, auction.checkAttendance);
         auction.bid(amount, playerData, bidForMain);
     }
+
+    // Withdraw a bidder's bid from a running auction. No DKP lookup: removing a bid
+    // needs nothing from the player record, and a bidder whose record went missing
+    // must still be able to pull out.
+    // Returns true when a bid was removed, false when the player had none.
+    // Throws 'Auction not found' once the auction has closed, because removeAuction()
+    // drops it from the list in startAuction's finally block.
+    async removeBid(guild, auctionId, player) {
+        const auction = this.auctions.find(auction => auction.id === auctionId && auction.guild === guild);
+        if (!auction) {
+            throw new Error('Auction not found');
+        }
+        return auction.removeBid(player);
+    }
 }
 
 module.exports = Auctioner;
