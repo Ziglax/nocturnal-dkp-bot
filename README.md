@@ -175,7 +175,7 @@ The bot exits at startup when one of the three required variables is missing, wh
    ```
 
    `2150747136` grants: View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Connect, Speak, Use Application Commands. Connect/Speak are needed for the auction bell, Attach Files for `/backup`, Read Message History to update long-auction embeds. Make sure the bot can see and write in the log/auction channels and join the raid voice channels (channel overrides apply).
-4. Slash commands are registered globally by the bot itself at every start; the first registration can take up to an hour to appear in Discord.
+4. Slash commands are registered globally by the bot itself at every start. Registration is a full replace across every server, so moving the bot to another host creates no duplicates. If a client still shows an outdated command, press Ctrl+R in Discord — Discord version-checks stale commands and triggers a reload.
 
 ### First run in a server
 
@@ -266,8 +266,22 @@ At every start the bot overwrites its **global** application commands with the c
 
 The bot uses the `DKP` database with the collections `players`, `raids`, `options`, `auctions` and `debuglog`. Pointing the bot at an existing database (for instance the one used by the original `dkpbot`) works as is — the schema is unchanged.
 
-- Application-level: `/backup` exports players and raids of one server (JSON in a zip, posted in the channel).
-- Full backup (all servers, configuration, auctions): `docker exec dkp-mongo mongodump --archive --db DKP > dkp-$(date +%F).archive` (restore with `docker exec -i dkp-mongo mongorestore --archive --db DKP < file`); Atlas users can use the Atlas snapshots.
+- Application-level: `/backup` exports players and raids of one server (JSON in a zip, posted in the channel). It is **not** a migration path: `JSON.stringify` turns every `_id` into a string, so re-importing that JSON breaks `getRaidById` / `getAuctionById` / `getAuction`, and configuration and auctions are not included at all.
+- Full backup (all servers, configuration, auctions):
+
+  ```bash
+  docker exec dkp-mongo mongodump --db DKP --gzip --archive=/tmp/dkp.gz && docker cp dkp-mongo:/tmp/dkp.gz ./dkp-$(date +%F).archive.gz
+  ```
+
+  Restore (stop the bot first with `docker compose stop dkp-bot`):
+
+  ```bash
+  docker cp ./dkp-2026-08-23.archive.gz dkp-mongo:/tmp/dkp.gz && docker exec dkp-mongo mongorestore --archive=/tmp/dkp.gz --gzip --nsInclude='DKP.*' --drop --stopOnError
+  ```
+
+  `--nsInclude='DKP.*'` and not `--db DKP`: `--db` is deprecated on archive input, is silently rewritten, and cannot rename (`--db DKP_NEW` restores zero documents and reports no error). `--drop` and `--stopOnError` are not optional — `mongorestore` inserts only, so without `--drop` a document whose `_id` already exists is skipped, and by default the run continues past duplicate-key errors and still exits 0.
+
+  Never pass `-t` to `docker exec` around a dump or a restore: the TTY turns `\n` into `\r\n` and corrupts the archive. Dump takes no flags, restore over stdin takes `-i` alone.
 
 ### Tests
 
