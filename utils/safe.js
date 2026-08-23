@@ -1,7 +1,7 @@
 // Crash-safe wrappers for Discord interaction handling.
 // These never throw and never reject: a routine Discord error (10062 Unknown
-// interaction, 40060 already acknowledged, 10008 Unknown Message, 50007 Cannot
-// send DM, transient 5xx) must never kill the process.
+// interaction, 40060 already acknowledged, 10008 Unknown Message, transient
+// 5xx) must never kill the process.
 
 // Error-path reply that routes on the interaction state. Do NOT call it after
 // safeAck()/deferUpdate() on a component interaction: deferred=true routes to
