@@ -171,35 +171,6 @@ describe('DKPManager', () => {
         });
     });
 
-    describe('addByCharacter()', () => {
-        it('should add the given amount of DKP to a player that owns a character', async () => {
-            // Arrange
-            const manager = new DKPManager(client);
-            const player = 'player';
-            const character1 = 'Destroyer';
-            const character2 = 'Princess';
-            const comment = 'Emperor kill';
-            const dkp = 11;
-            await playersCollection.insertOne({
-                player,
-                current: 0,
-                log: [],
-                characters: [character1, character2],
-                guild,
-            });
-            // Act
-            await manager.addByCharacter(guild, character1, dkp, comment);
-            // Assert
-            const result = await playersCollection.findOne({ player, guild });
-            expect(result.current).toBe(dkp);
-            const log = result.log[0];
-            expect(log.dkp).toBe(dkp);
-            expect(log.comment).toBe(comment);
-            const now = new Date();
-            expect(log.date).toBeCloseTo(now.getTime(), -3);
-        });
-    });
-
     describe('addCharacter()', () => {
         it('should add a character to a player', async () => {
             // Arrange

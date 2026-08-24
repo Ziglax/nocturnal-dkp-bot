@@ -124,31 +124,6 @@ module.exports = class DKPManager {
         );
     }
 
-    async addByCharacter(guild, character, dkp, comment, raid = null) {
-        const characterRegistered = await this.players.findOne({ characters: character });
-
-        if (!characterRegistered) {
-            throw new Error(`Character ${character} not registered`);
-        }
-
-        return this.players.findOneAndUpdate(
-            { characters: character, guild },
-            {
-                $inc: { current: dkp },
-                $push: {
-                    log: {
-                        dkp: dkp,
-                        comment,
-                        date: new Date().getTime(),
-                        raid: raid ? { _id: raid._id, name: raid.name } : null,
-                    },
-                },
-                $setOnInsert: { creationDate: new Date().getTime() },
-            },
-            { upsert: false },
-        );
-    }
-
     calculatePlayerAttendance(player, raids) {
         const totalAttendancePossibleSincePlayerJoined = raids.reduce((total, raid) => {
             if (raid.date < player.creationDate) {

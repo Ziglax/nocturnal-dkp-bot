@@ -38,7 +38,7 @@ This is a fork of the `dkpbot` written by Alberto Casado Torres, hardened for 24
 
 ## How it works
 
-**Players and DKP.** Every Discord member gets one player record per server, holding a DKP balance and a log of every movement (amount, reason, date, raid, item). The record is created the first time the member gains or loses DKP; players can attach their EverQuest character names to it with `/registercharacter` so `/parsedkps` can match `/who` logs.
+**Players and DKP.** Every Discord member gets one player record per server, holding a DKP balance and a log of every movement (amount, reason, date, raid, item). The record is created the first time the member gains or loses DKP; players can attach their EverQuest character names to it with `/registercharacter`.
 
 **Raids and attendance.** An officer runs `/startraid`; everyone in the configured raid voice channel(s) gets the *Start* DKP. From then on the bot **ticks** every `tickduration` minutes: each member currently in the raid channel(s) receives `dkpspertick` DKP and an attendance snapshot is recorded. `/endraid` takes a last snapshot (no DKP) and posts a summary in the log channel: one line per Start / tick / `/addraiddkp` / End snapshot, plus the loot won and the DKP removed with `/removedkp` during the raid (`/adddkp` additions are not linked to raids and do not appear). Attendance % shown by `/listplayersdkps` = snapshots that include the player ÷ snapshots taken since the player's record was created (their first DKP movement), over the raids of the last `raiddeprecationtime` days (older raids are flagged *deprecated* by an hourly job). A player with no possible snapshot yet shows 100 %.
 
@@ -79,21 +79,6 @@ Main vs alt bids: a bid flagged *main* only counts as main if it reaches `minbid
 | --- | --- | --- |
 | `/adddkp <player> <dkp> <comment>` | Officer | Adds `dkp` (≥ 1) to a player with a reason. Public confirmation in the channel. |
 | `/removedkp <player> <dkp> <comment>` | Officer | Removes `dkp` (≥ 1) from a player. Linked to the active raid if any, so it shows up in the raid summary. Balances may go negative. |
-| `/parsedkps <comment> <dkps> <raid> <log>` | Officer | Gives `dkps` to every character found in a pasted EverQuest `/who` output, matched against names registered with `/registercharacter`. `raid` (true/false) does **not** link the entries to the active raid nor record attendance (see [Known limitations](#known-limitations)). Posts a public embed listing the characters and the unknown names in the channel where the command is run. See [log format](#who-log-format). |
-
-#### `/who` log format
-
-Paste the `/who` output as a single string. The bot takes the first word after each `] ` and ignores the header/footer lines:
-
-```
-[Sun Dec 10 18:48:16 2023] ---------------------------
-[Sun Dec 10 18:48:16 2023] [50 Monk] SuperMonk (Human) <Super Guild>
-[Sun Dec 10 18:48:16 2023] [47 Shaman] SlowsAndStuff (Troll) <Super Guild>
-[Sun Dec 10 18:48:16 2023] [48 Magician] MoarPets (Dark Elf) <Super Guild>
-[Sun Dec 10 18:48:16 2023] There are 3 players in Nagafen's Lair.
-```
-
-Character names are matched exactly (case-sensitive).
 
 ### Auctions
 
@@ -116,7 +101,7 @@ The buttons of a long auction keep working across a bot restart — unlike a sho
 | `/listplayersdkps` | Everyone | Ranking of active players (at least one movement in the last `raiddeprecationtime` days) with DKP and attendance %, 10 per page. Not available while a raid is active. |
 | `/searchlogs <search>` | Everyone | Searches every log entry of the server whose reason matches `search` (case-insensitive, regex allowed). Loot is logged with the item name as reason, so searching an item shows who won it and for how much. A search term containing `tick` is refused (raid ticks cannot be listed — nor items whose name contains it); tick entries still appear when a broader pattern matches them. |
 | `/searchitem <search> [database]` | Everyone | Looks an item up by name or id in `quarm` (default) or `takp` and posts its stats. Up to 25 matches can be picked with buttons. |
-| `/registercharacter <name>` | Everyone | Attaches an EverQuest character name to your own player record (needed for `/parsedkps`). A name can only be registered once per server. You must already have a player record (first DKP movement): run too early, the command still answers *Successfully registered* but stores nothing. |
+| `/registercharacter <name>` | Everyone | Adds an EverQuest character name to the `characters` list of your own player record, creating the record if you have none yet. A name can only be registered once per server. **Nothing in the bot reads that list any more** — its only consumer, `/parsedkps`, was removed; the command is kept for whatever reads the database directly. |
 
 ### Backup
 
@@ -184,7 +169,7 @@ The bot exits at startup when one of the three required variables is missing, wh
 1. Create the officer role and the raid voice / log text / auction text channels.
 2. As an administrator, run `/configure` with the four required options (plus `tickduration`, `bidtime`, etc.).
 3. Check with `/showconfig`.
-4. Members run `/registercharacter <name>` once they have a player record (created by their first DKP movement, e.g. the Start of a raid) — run earlier, the command answers *Successfully registered* but stores nothing.
+4. Members run `/registercharacter <name>` if the character names are wanted in the database — nothing in the bot itself reads them (see the command table).
 
 ## Deployment
 
@@ -292,7 +277,7 @@ The bot uses the `DKP` database with the collections `players`, `raids`, `option
 
 ### Tests
 
-`npx jest` runs the specs in `Auctioner/`, `DKPManager/` and `logParser/` (`jest` is a dev dependency: `npm install` first; it is not in the Docker image). **The DKPManager and Auction specs connect to a hard-coded `mongodb://localhost:27017` — they ignore `MONGO_URL` — and wipe the `players`, `raids` and `options` collections of its `DKP` database (the Auction spec also leaves test auctions in `auctions`).** Run them only with a throwaway local MongoDB, never on a machine where port 27017 leads to a real database. `npx jest logParser` is the only spec that touches no database.
+`npx jest` runs the specs in `Auctioner/` and `DKPManager/` (`jest` is a dev dependency: `npm install` first; it is not in the Docker image). **Both connect to a hard-coded `mongodb://localhost:27017` — they ignore `MONGO_URL` — and wipe the `players`, `raids` and `options` collections of its `DKP` database (the Auction spec also leaves test auctions in `auctions`).** Run them only with a throwaway local MongoDB, never on a machine where port 27017 leads to a real database. Every remaining spec touches the database; there is no longer one that does not.
 
 ## Known limitations
 
@@ -300,7 +285,6 @@ The bot uses the `DKP` database with the collections `players`, `raids`, `option
 - A running short auction lives only in memory: a restart while one is open loses it (no DKP is moved before confirmation anyway), and a restart during the 6-minute confirmation window leaves the **Confirm Winner/s** button dead (it stays on the message but does nothing) — debit those winners with `/removedkp`. Finished short auctions are stored in `auctions` when they close.
 - There is no command to cancel a long auction (delete it from the `auctions` collection if needed).
 - Long auctions closed before May 2025 were stored without their winners; `/auctiondetails` shows their bids and reports the winners as *not recorded*.
-- `/parsedkps raid:true` does not link the entries to the active raid: no attendance snapshot is recorded, and `/dkphistory` shows the raid as *null* for those entries.
 - `/addraiddkp` only counts the main raid channel, not `secondraidchannel`.
 - A raid cannot be started with 0 DKP per tick (attendance only): `dkpspertick` 0 is treated as 1.
 - `/backup` posts the zip publicly; run it in an officer-only channel.
