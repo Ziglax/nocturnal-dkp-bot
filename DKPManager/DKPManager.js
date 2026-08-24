@@ -104,9 +104,21 @@ module.exports = class DKPManager {
         );
     }
 
+    // A debit only goes through when the player actually holds the DKP. The balance
+    // check rides in the filter, so checking and writing are one atomic operation:
+    // two debits racing over the same pool - a short auction confirmed while the
+    // worker closes a long one, an officer removing DKP at the same moment - cannot
+    // both pass it, and the loser writes nothing.
+    //
+    // Returns the updated player document, or null when the balance was too low or
+    // the player has no record. null means nothing was written, so every caller must
+    // report it as a failure rather than as a removal.
+    //
+    // Deliberately not an upsert any more: upserting on a player who had no record
+    // conjured one sitting at minus the debited amount.
     async removeDKP(guild, player, dkp, comment, raid = null, item = null) {
         return this.players.findOneAndUpdate(
-            { player, guild },
+            { player, guild, current: { $gte: dkp } },
             {
                 $inc: { current: -dkp },
                 $push: {
@@ -118,9 +130,8 @@ module.exports = class DKPManager {
                         item,
                     },
                 },
-                $setOnInsert: { creationDate: new Date().getTime() },
             },
-            { upsert: true },
+            { returnDocument: 'after' },
         );
     }
 
@@ -314,6 +325,14 @@ module.exports = class DKPManager {
         }
         if (auction.auctionActive === false) {
             throw new Error('Auction not active');
+        }
+        // The same deadline bid() enforces. auctionActive on its own is not enough:
+        // the worker deliberately waits out the lock delay before closing a finished
+        // auction, so between the advertised end and that close the flag is still
+        // true. Withdrawing in that window pulled the winning bid after bidding was
+        // supposed to be over and handed the item to the runner-up.
+        if (auction.auctionEnd < new Date().getTime()) {
+            throw new Error('Auction has ended');
         }
 
         return this.auctions.updateOne({ _id: auction._id, guild }, { $pull: { bids: { player: player.player } } });

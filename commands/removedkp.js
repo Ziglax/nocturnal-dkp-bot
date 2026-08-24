@@ -17,7 +17,20 @@ module.exports = {
         let written = false;
         try {
             const activeRaid = await manager.getActiveRaid(guild);
-            await manager.removeDKP(guild, player.id, dkp, comment, activeRaid);
+            const updated = await manager.removeDKP(guild, player.id, dkp, comment, activeRaid);
+            if (!updated) {
+                // removeDKP carries the balance check in its filter, so nothing was
+                // written: the player either does not hold that many DKP or has no
+                // record at all. Say which, so the officer knows what to do next.
+                const current = await manager.getPlayer(guild, player.id, false).catch(() => null);
+                await interaction.reply({
+                    content: current
+                        ? `:prohibited: <@${player.id}> only has ${current.current} DKP, so ${dkp} was not removed.`
+                        : `:prohibited: <@${player.id}> has no DKP record, so nothing was removed.`,
+                    flags: MessageFlags.Ephemeral
+                });
+                return;
+            }
             written = true;
 
             if (process.env.LOG_LEVEL === 'DEBUG') {

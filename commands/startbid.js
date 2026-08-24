@@ -150,29 +150,35 @@ module.exports = {
                                             }).catch(e => console.error(e));
 
                                             const raid = await manager.getActiveRaid(guild.id);
-                                            if (auction.winner) {
-                                                current = auction.winner;
-                                                await manager.removeDKP(guild.id, auction.winner.player, auction.winner.amount, auction.item.name, raid, auction.item);
+                                            const winners = auction.winner ? [auction.winner] : auction.winners;
+                                            const notDebited = [];
+                                            for (const winner of winners) {
+                                                current = winner;
+                                                const updated = await manager.removeDKP(guild.id, winner.player, winner.amount, auction.item.name, raid, auction.item);
+                                                if (!updated) {
+                                                    // removeDKP refuses a debit the balance cannot cover and writes
+                                                    // nothing when it does, so this winner still owes the DKP. The
+                                                    // bid was checked against a balance read when it was placed,
+                                                    // which another debit can have spent since.
+                                                    console.error('confirm winners: balance too low, not debited', auction.id, winner.player, winner.amount);
+                                                    notDebited.push(winner);
+                                                    continue;
+                                                }
                                                 if (process.env.LOG_LEVEL === 'DEBUG') {
                                                     log('Removing dkps from winer', {
-                                                        player: auction.winner.player,
-                                                        amount: auction.winner.amount,
+                                                        player: winner.player,
+                                                        amount: winner.amount,
                                                         item: auction.item.name
                                                     });
                                                 }
                                             }
-                                            else {
-                                                for (const winner of auction.winners) {
-                                                    current = winner;
-                                                    await manager.removeDKP(guild.id, winner.player, winner.amount, auction.item.name, raid, auction.item);
-                                                    if (process.env.LOG_LEVEL === 'DEBUG') {
-                                                        log('Removing dkps from winer', {
-                                                            player: winner.player,
-                                                            amount: winner.amount,
-                                                            item: auction.item.name
-                                                        });
-                                                    }
-                                                }
+
+                                            if (notDebited.length) {
+                                                confirmButton.setLabel('Not enough DKP - see message').setStyle(ButtonStyle.Danger);
+                                                await message.edit({
+                                                    content: `:warning: Not debited, balance too low: ${notDebited.map(w => `<@${w.player}> (${w.amount} DKP)`).join(', ')}. Take it by hand with \`/removedkp\` once they can cover it.`,
+                                                    components: [row]
+                                                }).catch(e => console.error(e));
                                             }
                                         }
                                     } catch (error) {

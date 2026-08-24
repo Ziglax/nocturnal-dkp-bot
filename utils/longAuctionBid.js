@@ -53,9 +53,10 @@ const handleLongAuctionBid = async (interaction, manager) => {
     }
 
     // Capped at the 15 minutes Discord keeps a modal open. The auction end is not
-    // pre-checked: manager.bid already refuses a late bid with 'Auction has ended',
-    // and one round trip less keeps this path short. A dismissed modal rejects
-    // here, which is not an error - it resolves to null and the click is dropped.
+    // pre-checked: manager.bid and manager.removeBid both refuse a late one with
+    // 'Auction has ended', and one round trip less keeps this path short. A
+    // dismissed modal rejects here, which is not an error - it resolves to null and
+    // the click is dropped.
     const submitted = await interaction.awaitModalSubmit({
         time: 15 * 60 * 1000,
         filter: m => m.customId === modalId && m.user.id === interaction.user.id,
