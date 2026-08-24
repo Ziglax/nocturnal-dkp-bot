@@ -401,16 +401,13 @@ sudo timedatectl set-timezone Europe/Paris
 timedatectl
 ```
 
-**Do not set `TZ` on the bot container.** `logParser/logParser.js:3` parses
-EverQuest log headers that carry no UTC offset (`[Sun Nov 19 09:52:52 2023]`)
-in the runtime's local zone, and writes the result to MongoDB via
-`commands/parsedkps.js`. Changing the container's zone would shift the
-timestamps of every future parsed log relative to every past one. Containers
-stay UTC, which is what production does today.
-
-(`analyze_player_logs.js:38` pins `Europe/Paris` explicitly for display, and
+**Leave the bot container on UTC**, which is what production does today. No
+code reads or writes a local-zone timestamp any more: every date stored in
+MongoDB is an epoch integer from `new Date().getTime()`,
+`analyze_player_logs.js:38` pins `Europe/Paris` explicitly for display, and
 `utils/Logger.js` uses Discord `<t:…>` markers, which render in each viewer's
-own zone. Neither is affected.)
+own zone. (The one zone-sensitive parser, `logParser/logParser.js`, went with
+`/parsedkps`.)
 
 ### 3.8 Unattended security upgrades
 

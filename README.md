@@ -38,14 +38,14 @@ This is a fork of the `dkpbot` written by Alberto Casado Torres, hardened for 24
 
 ## How it works
 
-**Players and DKP.** Every Discord member gets one player record per server, holding a DKP balance and a log of every movement (amount, reason, date, raid, item). The record is created the first time the member gains or loses DKP; players can attach their EverQuest character names to it with `/registercharacter` so `/parsedkps` can match `/who` logs.
+**Players and DKP.** Every Discord member gets one player record per server, holding a DKP balance and a log of every movement (amount, reason, date, raid, item). The record is created the first time the member gains or loses DKP; players can attach their EverQuest character names to it with `/registercharacter`.
 
 **Raids and attendance.** An officer runs `/startraid`; everyone in the configured raid voice channel(s) gets the *Start* DKP. From then on the bot **ticks** every `tickduration` minutes: each member currently in the raid channel(s) receives `dkpspertick` DKP and an attendance snapshot is recorded. `/endraid` takes a last snapshot (no DKP) and posts a summary in the log channel: one line per Start / tick / `/addraiddkp` / End snapshot, plus the loot won and the DKP removed with `/removedkp` during the raid (`/adddkp` additions are not linked to raids and do not appear). Attendance % shown by `/listplayersdkps` = snapshots that include the player ÷ snapshots taken since the player's record was created (their first DKP movement), over the raids of the last `raiddeprecationtime` days (older raids are flagged *deprecated* by an hourly job). A player with no possible snapshot yet shows 100 %.
 
 **Auctions.** Two flavours:
 
 - **Short auction** (`/startbid`) — lives in memory for `bidtime` seconds. The bot posts the item in the auction channel with *Main bid* / *Alt bid* / *Cancel* buttons and rings a bell in the raid channel(s). Clicking a bid button opens a Discord form asking for the amount; entering **0** withdraws the bid. At the end the winners are announced and the officer who started it presses **Confirm Winner/s** (within 6 minutes) to debit the DKP.
-- **Long auction** (`/startlongbid`) — stored in the database, runs for N hours. Players bid with `/bid` until the end time; the bot closes it about 20 minutes later and edits the original auction post with the winners and their bids (no new message, nobody is pinged). At close every bid is re-checked against the bidder's balance at that moment: a bid the player can no longer cover (e.g. after winning a short auction meanwhile) is dropped silently. **DKP is not debited automatically** — use `/removedkp`.
+- **Long auction** (`/startlongbid`) — stored in the database, runs for N hours. The bot posts the item in the long auction channel with the same *Main bid* / *Alt bid* buttons and form as a short auction; players bid until the end time; the bot closes it about 20 minutes later and edits the original auction post with the winners and their bids (no new message, nobody is pinged). At close every bid is re-checked against the bidder's balance at that moment: a bid the player can no longer cover (e.g. after winning a short auction meanwhile) is dropped silently. **DKP is not debited automatically** — use `/removedkp`.
 
 Main vs alt bids: a bid flagged *main* only counts as main if it reaches `minbidtolockformain`; an alt bid can still beat main bids when it exceeds the highest main bid by `overbidtowinmain`. Main bids win first, alt bids fill the remaining items; equal bids are split at random.
 
@@ -79,32 +79,18 @@ Main vs alt bids: a bid flagged *main* only counts as main if it reaches `minbid
 | --- | --- | --- |
 | `/adddkp <player> <dkp> <comment>` | Officer | Adds `dkp` (≥ 1) to a player with a reason. Public confirmation in the channel. |
 | `/removedkp <player> <dkp> <comment>` | Officer | Removes `dkp` (≥ 1) from a player. Linked to the active raid if any, so it shows up in the raid summary. Balances may go negative. |
-| `/parsedkps <comment> <dkps> <raid> <log>` | Officer | Gives `dkps` to every character found in a pasted EverQuest `/who` output, matched against names registered with `/registercharacter`. `raid` (true/false) does **not** link the entries to the active raid nor record attendance (see [Known limitations](#known-limitations)). Posts a public embed listing the characters and the unknown names in the channel where the command is run. See [log format](#who-log-format). |
-
-#### `/who` log format
-
-Paste the `/who` output as a single string. The bot takes the first word after each `] ` and ignores the header/footer lines:
-
-```
-[Sun Dec 10 18:48:16 2023] ---------------------------
-[Sun Dec 10 18:48:16 2023] [50 Monk] SuperMonk (Human) <Super Guild>
-[Sun Dec 10 18:48:16 2023] [47 Shaman] SlowsAndStuff (Troll) <Super Guild>
-[Sun Dec 10 18:48:16 2023] [48 Magician] MoarPets (Dark Elf) <Super Guild>
-[Sun Dec 10 18:48:16 2023] There are 3 players in Nagafen's Lair.
-```
-
-Character names are matched exactly (case-sensitive).
 
 ### Auctions
 
 | Command | Who | What it does |
 | --- | --- | --- |
 | `/startbid <search> [minbid] [numitems] [database]` | Officer | Short auction. Searches the item (name or numeric id) in `database` (`quarm` default, or `takp`), lets you pick it with buttons if several match (up to 25; 26–40 matches are only listed with their ids, more asks you to refine the search), then shows a **Start Auction** button (30 s). The auction runs `bidtime` seconds in the auction channel with bid buttons and a bell in the raid channel(s). When it ends, the winners are shown with a **Confirm Winner/s** button (officer who started it, 6 minutes): confirming debits the DKP with the item name as reason. `minbid` defaults to the configured minimum bid (`0` also means "use the configured value"); `numitems` (default 1) = how many top bids win. The **Cancel** button is limited to members of the officer role. |
-| `/startlongbid <search> [minbid] [numitems] [duration] [database]` | Officer | Same item search and **Start Auction** button as `/startbid`; the auction is created when the button is pressed and stored in the database, open for `duration` hours (default 48). Posted in the long auction channel (falls back to the auction channel) with its **Auction ID**. Closed by the bot ~20 minutes after the end; the embed is updated with the winners. Winners are **not** debited automatically. |
-| `/bid <auctionid> <dkps> [bidformain]` | Everyone | Bids on a long auction. `dkps` must be ≤ your current DKP and ≥ the minimum bid; `0` removes your bid; `bidformain` defaults to true. Replaces your previous bid on that auction. Rejected once the end time has passed. |
-| `/auctiondetails <auctionid>` | Officer | Shows the bids and winners of a closed auction (ephemeral) and announces publicly in the auction channel that you peeked. Works on finished auctions only: closed long auctions and short auctions that ran to the end (their Auction ID is printed on the winners embed; cancelled ones are not stored). |
+| `/startlongbid <search> [minbid] [numitems] [duration] [database]` | Officer | Same item search and **Start Auction** button as `/startbid`; the auction is created when the button is pressed and stored in the database, open for `duration` hours (default 48). Posted in the long auction channel (falls back to the auction channel) with its **Auction ID** and *Main bid* / *Alt bid* buttons. Closed by the bot ~20 minutes after the end; the embed is updated with the winners. Winners are **not** debited automatically. |
+| `/auctiondetails <auctionid>` | Officer | Shows the bids and winners of a **finished** auction (ephemeral, split over several messages if long). A running auction is refused: officers bid too, so the standing bids of a live auction are shown to nobody. A long auction only becomes readable once the bot closes it, about 20 minutes after its end time. Short auctions are readable as soon as they end (their Auction ID is printed on the winners embed; cancelled ones are not stored). Once the details have been shown, the auction channel gets a public notice that you peeked — nothing is posted when the command refuses. |
 
-Bidding on a short auction opens a Discord form on the bid button, so it works whether or not the player has DMs open. The form belongs to the auction whose button was clicked, so several auctions can run side by side without an amount landing on the wrong item. Discord only allows one form open at a time, so clicking a second bid button replaces the first form; the abandoned auction is left untouched and can be bid on afterwards. Entering `0` withdraws the bid, and bidding again replaces it. Per auction it is either a main or an alt bid, never both. Bidders must already have a player record.
+Bidding works the same way on both kinds of auction: click *Main bid* or *Alt bid* on the auction message and a Discord form asks for the amount. It works whether or not the player has DMs open. The form belongs to the auction whose button was clicked, so several auctions can run side by side without an amount landing on the wrong item. Discord only allows one form open at a time, so clicking a second bid button replaces the first form; the abandoned auction is left untouched and can be bid on afterwards. Entering `0` withdraws the bid, and bidding again replaces it. The amount must be a whole number, at most your current DKP and at least the minimum bid. Per auction it is either a main or an alt bid, never both. Bidders must already have a player record.
+
+The buttons of a long auction keep working across a bot restart — unlike a short auction, it is stored in the database and its buttons are answered from the auction id they carry rather than by a listener that would die with the process. They disappear when the bot closes the auction.
 
 ### Lookups
 
@@ -115,7 +101,7 @@ Bidding on a short auction opens a Discord form on the bid button, so it works w
 | `/listplayersdkps` | Everyone | Ranking of active players (at least one movement in the last `raiddeprecationtime` days) with DKP and attendance %, 10 per page. Not available while a raid is active. |
 | `/searchlogs <search>` | Everyone | Searches every log entry of the server whose reason matches `search` (case-insensitive, regex allowed). Loot is logged with the item name as reason, so searching an item shows who won it and for how much. A search term containing `tick` is refused (raid ticks cannot be listed — nor items whose name contains it); tick entries still appear when a broader pattern matches them. |
 | `/searchitem <search> [database]` | Everyone | Looks an item up by name or id in `quarm` (default) or `takp` and posts its stats. Up to 25 matches can be picked with buttons. |
-| `/registercharacter <name>` | Everyone | Attaches an EverQuest character name to your own player record (needed for `/parsedkps`). A name can only be registered once per server. You must already have a player record (first DKP movement): run too early, the command still answers *Successfully registered* but stores nothing. |
+| `/registercharacter <name>` | Everyone | Adds an EverQuest character name to the `characters` list of your own player record, creating the record if you have none yet. A name can only be registered once per server. **Nothing in the bot reads that list any more** — its only consumer, `/parsedkps`, was removed; the command is kept for whatever reads the database directly. |
 
 ### Backup
 
@@ -134,7 +120,7 @@ Stored per Discord server in the `options` collection. Values are set with `/con
 | `role` | Role (required) | — | The officer role allowed to run raid, DKP and auction commands. |
 | `raidchannel` | Voice channel (required) | — | Attendance: who is in it at Start and at each tick gets DKP (`/endraid` only records who is there). Also the channel `/addraiddkp` pays, and where the auction bell plays. |
 | `logchannel` | Text channel (required) | — | Raid start/tick/end embeds, `/addraiddkp` and Raid-Helper reports. |
-| `auctionchannel` | Text channel (required) | — | Short auctions (`/startbid`) and the `/auctiondetails` notice. |
+| `auctionchannel` | Text channel (required) | — | Short auctions (`/startbid`) and the `/auctiondetails` notice (only posted when details were actually shown). |
 | `secondraidchannel` | Voice channel | none | Second voice channel counted for attendance (Start, ticks, End — not `/addraiddkp`). Must differ from `raidchannel`. |
 | `longauctionchannel` | Text channel | `auctionchannel` | Where long auctions (`/startlongbid`) are posted. |
 | `tickduration` | Number (minutes, ≥ 0.1) | 6 | Default time between raid ticks; `/startraid tickduration` overrides it per raid. |
@@ -160,7 +146,7 @@ Copy `.env_example` to `.env` at the project root (it is git- and docker-ignored
 | `DISCORD_TOKEN` | yes | Bot token from the Discord developer portal. |
 | `DISCORD_CLIENT_ID` | yes | Application ID; used to register the slash commands. |
 | `MONGO_URL` | yes | MongoDB connection string. Docker Compose: `mongodb://mongo:27017`; bare metal: `mongodb://localhost:27017`; Atlas: the full `mongodb+srv://…` URI. The database name is always `DKP`. |
-| `LOG_LEVEL` | no | `DEBUG` writes a trace (who, what, values) of the main DKP/auction commands — `/adddkp`, `/removedkp`, `/addraiddkp`, `/bid`, `/playerdkp`, `/listplayersdkps`, `/searchitem`, `/auctiondetails`, short-auction bids and winners — into the `debuglog` collection. Anything else = off. Does not change console verbosity. |
+| `LOG_LEVEL` | no | `DEBUG` writes a trace (who, what, values) of the main DKP/auction commands — `/adddkp`, `/removedkp`, `/addraiddkp`, `/playerdkp`, `/listplayersdkps`, `/searchitem`, `/auctiondetails`, auction bids and winners — into the `debuglog` collection. Anything else = off. Does not change console verbosity. |
 | `LOG_FILE` | no | Path of the log file mirror, relative to the working directory. Default `logs/bot.log`; set it empty to log to the console only. |
 
 The bot exits at startup when one of the three required variables is missing, when MongoDB is unreachable or when the Discord login fails.
@@ -183,7 +169,7 @@ The bot exits at startup when one of the three required variables is missing, wh
 1. Create the officer role and the raid voice / log text / auction text channels.
 2. As an administrator, run `/configure` with the four required options (plus `tickduration`, `bidtime`, etc.).
 3. Check with `/showconfig`.
-4. Members run `/registercharacter <name>` once they have a player record (created by their first DKP movement, e.g. the Start of a raid) — run earlier, the command answers *Successfully registered* but stores nothing.
+4. Members run `/registercharacter <name>` if the character names are wanted in the database — nothing in the bot itself reads them (see the command table).
 
 ## Deployment
 
@@ -291,14 +277,14 @@ The bot uses the `DKP` database with the collections `players`, `raids`, `option
 
 ### Tests
 
-`npx jest` runs the specs in `Auctioner/`, `DKPManager/` and `logParser/` (`jest` is a dev dependency: `npm install` first; it is not in the Docker image). **The DKPManager and Auction specs connect to a hard-coded `mongodb://localhost:27017` — they ignore `MONGO_URL` — and wipe the `players`, `raids` and `options` collections of its `DKP` database (the Auction spec also leaves test auctions in `auctions`).** Run them only with a throwaway local MongoDB, never on a machine where port 27017 leads to a real database. `npx jest logParser` is the only spec that touches no database.
+`npx jest` runs the specs in `Auctioner/` and `DKPManager/` (`jest` is a dev dependency: `npm install` first; it is not in the Docker image). **Both connect to a hard-coded `mongodb://localhost:27017` — they ignore `MONGO_URL` — and wipe the `players`, `raids` and `options` collections of its `DKP` database (the Auction spec also leaves test auctions in `auctions`).** Run them only with a throwaway local MongoDB, never on a machine where port 27017 leads to a real database. Every remaining spec touches the database; there is no longer one that does not.
 
 ## Known limitations
 
 - Long-auction winners are announced but not debited: officers must `/removedkp` them manually.
 - A running short auction lives only in memory: a restart while one is open loses it (no DKP is moved before confirmation anyway), and a restart during the 6-minute confirmation window leaves the **Confirm Winner/s** button dead (it stays on the message but does nothing) — debit those winners with `/removedkp`. Finished short auctions are stored in `auctions` when they close.
-- `/auctiondetails` fails on a long auction that is still open (the public *peek* notice is posted anyway), and there is no command to cancel a long auction (delete it from the `auctions` collection if needed).
-- `/parsedkps raid:true` does not link the entries to the active raid: no attendance snapshot is recorded, and `/dkphistory` shows the raid as *null* for those entries.
+- There is no command to cancel a long auction (delete it from the `auctions` collection if needed).
+- Long auctions closed before May 2025 were stored without their winners; `/auctiondetails` shows their bids and reports the winners as *not recorded*.
 - `/addraiddkp` only counts the main raid channel, not `secondraidchannel`.
 - A raid cannot be started with 0 DKP per tick (attendance only): `dkpspertick` 0 is treated as 1.
 - `/backup` posts the zip publicly; run it in an officer-only channel.

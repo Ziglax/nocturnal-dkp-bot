@@ -10,6 +10,7 @@ const Worker = require('./worker/Worker.js');
 const Logger = require('./utils/Logger');
 const Auctioner = require('./Auctioner/Auctioner.js');
 const { safeReply } = require('./utils/safe.js');
+const { handleLongAuctionBid } = require('./utils/longAuctionBid.js');
 
 // Process-level safety nets: a rejected promise or stray exception must not
 // kill the bot mid-raid. Log-only by policy (prod restarts are slow and lose
@@ -69,6 +70,19 @@ for (const file of commandFiles) {
 }
 
 client.on(Events.InteractionCreate, async interaction => {
+	// Long auction bid buttons, before the chat-input gate below drops every
+	// component interaction. They cannot be answered by a message collector like
+	// the short-auction buttons are: a long auction outlives the process, and a
+	// collector does not, so after a restart its buttons would silently do nothing.
+	if (interaction.isButton() && interaction.customId.startsWith('lbid_')) {
+		try {
+			await handleLongAuctionBid(interaction, dkpManager);
+		} catch (error) {
+			console.error('[long auction bid]', error);
+		}
+		return;
+	}
+
 	if (!interaction.isChatInputCommand()) return;
 
 	if (!interaction.guild) {

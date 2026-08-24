@@ -213,6 +213,31 @@ module.exports = class Logger {
         return result;
     };
 
+    // Discord rejects an embed field longer than 1024 characters, and it rejects the
+    // whole message with it. That matters most on a long auction: removing its bid
+    // buttons is part of the same edit, so a bid list grown past the limit over
+    // several days would leave the buttons sitting on a closed auction.
+    // An empty value is accepted and renders as a blank field, so the fallback text
+    // is cosmetic - it just keeps a bidless auction from looking half-written.
+    embedFieldValue(lines, empty = 'None') {
+        if (!lines?.length) {
+            return empty;
+        }
+
+        const kept = [];
+        let length = 0;
+        for (const line of lines) {
+            // Keep room for the line that stands in for whatever does not fit.
+            if (length + line.length + 1 > 990) {
+                kept.push(`... and ${lines.length - kept.length} more`);
+                break;
+            }
+            kept.push(line);
+            length += line.length + 1;
+        }
+        return kept.join('\n');
+    }
+
     async sendLongAuctionEmbed(guildOptions, auction, minBid = 0, numberOfItems = 1) {
         const discordGuild = await this.client.guilds.fetch(guildOptions.guild);
         const channel = discordGuild.channels.cache.get(guildOptions.longAuctionChannel || guildOptions.auctionChannel);
@@ -240,9 +265,21 @@ module.exports = class Logger {
                 inline: true
             }
         ]
+        // Same two buttons as a short auction, so a bidder does not have to learn a
+        // second way to bid. They cannot be driven by a message collector like the
+        // short-auction ones: a long auction runs for days and survives a restart,
+        // which a collector does not. index.js routes them by custom id instead, so
+        // the id has to carry everything the handler needs - the side and the
+        // auction. ObjectId is hex, so it never collides with the underscores.
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`lbid_main_${auction._id}`).setLabel('Main bid').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`lbid_alt_${auction._id}`).setLabel('Alt bid').setStyle(ButtonStyle.Secondary),
+        );
+
         const message = await channel.send({
             content: `Bid started - **${minBid} DKP** minimum bid. ${numberOfItems > 1 ? `Top **${numberOfItems}** bids win. Should end at <t:${Math.floor(auction.auctionEnd / 1000)}:f>` : ''}`,
-            embeds: [embed]
+            embeds: [embed],
+            components: [row]
         })
         //return embed identifier
         return message.id;
@@ -275,18 +312,21 @@ module.exports = class Logger {
 
             embed.fields.push({
                 name: 'Winner/s',
-                value: auction.winners?.map(winner => `<@${winner.player}> - ${winner.amount} ${winner.bidForMain ? '' : 'Alt'}`).join('\n'),
+                value: this.embedFieldValue(auction.winners?.map(winner => `<@${winner.player}> - ${winner.amount} ${winner.bidForMain ? '' : 'Alt'}`), 'No winner'),
                 inline: false
             })
 
             embed.fields.push({
                 name: 'Bids',
-                value: auction.bids?.map(bid => `${bid.amount} ${bid.bidForMain ? '' : 'Alt'}`).join('\n'),
+                value: this.embedFieldValue(auction.bids?.map(bid => `${bid.amount} ${bid.bidForMain ? '' : 'Alt'}`), 'No bids'),
                 inline: false
             })
 
+            // Clearing the components is what retires the bid buttons: they are not
+            // owned by a collector that could expire on its own.
             await message.edit({
-                embeds: [embed]
+                embeds: [embed],
+                components: []
             })
         } catch (e) {
             console.log(e);
