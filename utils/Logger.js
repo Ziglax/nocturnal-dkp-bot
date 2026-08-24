@@ -311,7 +311,7 @@ module.exports = class Logger {
         const messageId = auction.messageId;
         if (!messageId) {
             console.log('No messageId found for auction');
-            return;
+            return false;
         }
         const channel = await this.client.channels.cache.get(longAuctionChannel);
         try {
@@ -399,6 +399,10 @@ module.exports = class Logger {
                 embeds: [embed],
                 components
             })
+            // True only once the post actually carries the results. /endauction has an
+            // officer waiting to be told whether the channel was told; the worker
+            // ignores it, because for the worker this post is the only report there is.
+            return true
         } catch (e) {
             console.log(e);
             return false

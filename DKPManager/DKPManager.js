@@ -334,6 +334,35 @@ module.exports = class DKPManager {
         return result;
     }
 
+    // Stops an auction taking bids without settling it, for /endauction.
+    //
+    // auctionActive was never what stopped a bidder: bid() and removeBid() require it
+    // rather than change it, and two updates that both demand the same value never lose
+    // to each other - so the compare-and-swap in endAuction cannot see a bid at all. The
+    // deadline is what stops them, and the worker never had to think about that because
+    // it only ever closes auctions whose auctionEnd is already behind them. An officer
+    // closing early is the first caller for which it is still days away, so the deadline
+    // has to be pulled in before the bids are read, not after the winners are written.
+    //
+    // One millisecond behind now, because those two checks refuse on `auctionEnd < now`:
+    // a check running on this very millisecond would otherwise still pass.
+    //
+    // lockDelay goes to 0 with it. Nothing reads it after a close except the worker's own
+    // close filter, and leaving it at twenty minutes would hold the auction there for
+    // that long if the settlement failed halfway; at 0 the next tick finishes the job.
+    //
+    // Compare-and-swap on auctionActive, like endAuction and cancelAuction above: null
+    // means the worker or /cancelauction got there first. The document comes back with
+    // the bids as they stood the moment bidding stopped, and that is the list the caller
+    // has to settle - reading them again later would reopen the window this closes.
+    async closeAuctionBidding(guild, auctionId) {
+        return this.auctions.findOneAndUpdate(
+            { _id: new ObjectId(auctionId), guild, auctionActive: true },
+            { $set: { auctionEnd: new Date().getTime() - 1, lockDelay: 0 } },
+            { returnDocument: 'after' },
+        );
+    }
+
     // Voids a long auction: it stops taking bids and is never settled. The bids are
     // deliberately kept - an officer has to be able to read what was bid on an
     // auction they pulled, and /auctiondetails is the only way to do that.

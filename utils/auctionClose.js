@@ -88,11 +88,13 @@ const closeLongAuction = async (manager, logger, guildOptions, auctionData) => {
             console.error('[auction close] could not re-read the auction for its recap', auctionData._id, e?.message || e);
             return auctionData.debitedPlayers || [];
         });
-    await logger.updateLongAuctionEmbed(guildOptions, auctionData, debitReport);
+    const repainted = await logger.updateLongAuctionEmbed(guildOptions, auctionData, debitReport);
 
-    // For /endauction, which has an officer waiting on an answer. The worker throws it
-    // away: its recap is the auction post.
-    return { winners: auctionData.winners, debitReport };
+    // For /endauction, which has an officer waiting on an answer. repainted is what stops
+    // it reporting the results as public when the post could not be edited - a deleted
+    // message or a lost permission is logged inside the repaint and never thrown. The
+    // worker throws all three away: its recap is the auction post.
+    return { winners: auctionData.winners, debitReport, repainted: repainted === true };
 };
 
 module.exports = { closeLongAuction };

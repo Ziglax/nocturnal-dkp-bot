@@ -17,6 +17,10 @@ const { closeLongAuction } = require('../utils/auctionClose.js');
 // outcome would leave them unable to tell a working command from a broken one.
 // The cost: when a block of auctions is running side by side, this one's price
 // becomes public while the others are still taking bids.
+//
+// Bidding is stopped in its own write before any of that, because the auction's
+// end time is still in the future and that time - not auctionActive - is what
+// bid() and removeBid() actually refuse on.
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('endauction')
@@ -74,12 +78,37 @@ module.exports = {
             return;
         }
 
+        // Bidding stops here, before the winners are read - never after they are
+        // written. Until the deadline is pulled in, a bid or a withdrawal can still
+        // land while closeLongAuction is fetching the bidders, and endAuction's
+        // compare-and-swap cannot see it: bid() requires auctionActive rather than
+        // changing it, so the two writes never conflict. The winners would then be
+        // settled from a bids array the database no longer holds - a winner debited
+        // for a bid they had just withdrawn, or a higher bid stored and ignored.
+        //
+        // The document that comes back carries the bids as they stood the moment
+        // bidding stopped, and its auctionEnd is now, so the recap stops advertising
+        // an end date days away on an auction it has just declared over.
+        const stopped = await manager.closeAuctionBidding(guild, auctionid);
+        if (!stopped) {
+            // Lost to the worker's tick or to /cancelauction in the milliseconds since
+            // the read above. Nothing was written, so this is the one branch that can
+            // promise the auction is exactly as somebody else left it.
+            const fresh = await manager.getAuction(guild, auctionid).catch(() => null);
+            await interaction.editReply({
+                content: fresh?.cancelled
+                    ? '⛔ That auction was cancelled while this command was running. It has no winner and no DKP were taken.'
+                    : '⛔ That auction closed while this command was running - the bot got there first. `/auctiondetails ' + auctionid + '` shows what happened.',
+            });
+            return;
+        }
+
         // closeLongAuction throws when the auction stopped being active between the
-        // read above and its own compare-and-swap: the worker's minute tick got there
+        // write above and its own compare-and-swap: the worker's minute tick got there
         // first, or somebody cancelled it. It can also throw halfway through, after
         // the auction is already closed - which is why the wording below never
         // promises that nothing happened.
-        const closed = await closeLongAuction(manager, logger, guildConfig, auction).catch(error => {
+        const closed = await closeLongAuction(manager, logger, guildConfig, stopped).catch(error => {
             console.error('[endauction] close failed', auctionid, error);
             return { error };
         });
@@ -88,7 +117,7 @@ module.exports = {
             await interaction.editReply({
                 content: message === 'Auction not active' || message === 'Auction not found'
                     ? '⛔ That auction closed while this command was running - the bot got there first, or somebody cancelled it. `/auctiondetails ' + auctionid + '` shows what happened.'
-                    : '⛔ The auction could not be closed: ' + (message || 'unknown error') + '. Check `/auctiondetails ' + auctionid + '` before retrying - it may have closed before the failure.',
+                    : '⛔ The auction could not be closed: ' + (message || 'unknown error') + '. It has stopped taking bids and the bot retries it on its next pass - check `/auctiondetails ' + auctionid + '` before doing anything by hand, it may have closed before the failure.',
             });
             return;
         }
@@ -107,8 +136,18 @@ module.exports = {
         const result = winners.length
             ? winners.map(winner => '<@' + winner.player + '> - ' + winner.amount + (winner.bidForMain ? '' : ' Alt')).join('\n')
             : 'No winner - nobody could bid on it.';
+        // The repaint is a second, separate failure: the message may have been deleted,
+        // or the bot may have lost the channel since. The auction is closed either way,
+        // and whatever DKP it was going to take is already taken, so the reply says which
+        // of the two happened rather than handing the officer an all-clear on an
+        // announcement that never went out. On an autodebit: false auction the Confirm
+        // DKP button was drawn on that post, so it is lost with it and the winners have
+        // to be charged with /removedkp.
+        const done = '✅ Auction closed on **' + auction.item?.name + '**.';
         await interaction.editReply({
-            content: '✅ Auction closed on **' + auction.item?.name + '**. The results are now public in the auction channel.\n' + result,
+            content: (closed.repainted
+                ? done + ' The results are now public in the auction channel.'
+                : done + '\n⚠️ The auction message could not be updated - it may still show the bid buttons, and the winners below were never announced. Post them in the channel yourself.') + '\n' + result,
             // The bot writes the mentions, so without this it pings every winner a
             // second time.
             allowedMentions: { parse: [] },
