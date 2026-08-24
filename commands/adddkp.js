@@ -1,5 +1,5 @@
 require('dotenv').config()
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const log = require('../debugger.js');
 
 module.exports = {
@@ -23,7 +23,16 @@ module.exports = {
             });
         }
 
-        manager.addDKP(guild, player.id, dkp, comment);
+        // Awaited. Without the await this replied "Added N DKPs" the instant the
+        // write was handed to the driver, so a rejected write announced DKP that
+        // never landed and left the officer with no way to know.
+        try {
+            await manager.addDKP(guild, player.id, dkp, comment);
+        } catch (error) {
+            console.error('[adddkp] DKP write failed', player.id, error?.message || error);
+            await interaction.reply({ content: `:prohibited: The DKP write failed for <@${player.id}>. Check \`/dkphistory\` before running this again.`, flags: MessageFlags.Ephemeral });
+            return;
+        }
         await interaction.reply(`Added ${dkp} DKPs to <@${player.id}>. ${comment}`);
     },
     restricted: true,

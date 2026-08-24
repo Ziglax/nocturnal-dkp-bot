@@ -34,9 +34,20 @@ module.exports = {
             return;
         }
 
-        playersInChannel.forEach(async player => {
-            await manager.addDKP(guild, player, dkp, comment, activeRaid);
-        });
+        // Awaited one at a time. forEach(async ...) fired every write and waited for
+        // none of them, so the reply below announced DKP that could still fail to
+        // land, and the attendance snapshot recorded players nobody had credited.
+        const credited = [];
+        const failed = [];
+        for (const player of playersInChannel) {
+            try {
+                await manager.addDKP(guild, player, dkp, comment, activeRaid);
+                credited.push(player);
+            } catch (error) {
+                console.error('[addraiddkp] DKP write failed', player, error?.message || error);
+                failed.push(player);
+            }
+        }
 
         if (process.env.LOG_LEVEL === 'DEBUG') {
             log(`Executed addraiddkp command`, {
@@ -45,10 +56,22 @@ module.exports = {
             });
         }
 
-        await manager.addRaidAttendance(guild, activeRaid, playersInChannel, comment, dkp);
-        await interaction.reply({ content: `Added ${dkp} DKP to all players (${playersInChannel.length}) in the raid channel` });
+        if (credited.length === 0) {
+            await interaction.reply({ content: `:prohibited: No DKP was added: all ${playersInChannel.length} writes failed. No attendance was recorded either.`, flags: MessageFlags.Ephemeral });
+            return;
+        }
 
-        logger.sendRaidEmebed(guildConfig, activeRaid, playersInChannel, 15105570, `${activeRaid.name}: ${comment}`, dkp, 'DKP');
+        // Only the players actually credited go into the snapshot: an attendance
+        // entry naming someone who never received the DKP would count towards their
+        // attendance % for a tick they were not paid for.
+        await manager.addRaidAttendance(guild, activeRaid, credited, comment, dkp);
+        await interaction.reply({
+            content: failed.length
+                ? `Added ${dkp} DKP to ${credited.length} of ${playersInChannel.length} players in the raid channel. Failed for ${failed.slice(0, 10).map(id => `<@${id}>`).join(', ')}${failed.length > 10 ? ` and ${failed.length - 10} more` : ''} - they were left out of the attendance snapshot.`
+                : `Added ${dkp} DKP to all players (${credited.length}) in the raid channel`
+        });
+
+        logger.sendRaidEmebed(guildConfig, activeRaid, credited, 15105570, `${activeRaid.name}: ${comment}`, dkp, 'DKP');
     },
     restricted: true,
 };
