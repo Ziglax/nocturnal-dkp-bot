@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { processRaidHelperEventDKP } = require('../utils/raidHelperUtils');
 
 module.exports = {
@@ -11,12 +11,12 @@ module.exports = {
 
         const activeRaid = await manager.getActiveRaid(guild);
         if (!activeRaid) {
-            await interaction.reply({ content: ':prohibited: There is no active raid', ephemeral: true });
+            await interaction.reply({ content: ':prohibited: There is no active raid', flags: MessageFlags.Ephemeral });
             return;
         }
         await manager.endRaid(guild);
 
-        await interaction.reply({ content: `Raid ${activeRaid.name} ended`, ephemeral: true });
+        await interaction.reply({ content: `Raid ${activeRaid.name} ended`, flags: MessageFlags.Ephemeral });
         const raidChannel = await interaction.guild.channels.fetch(guildConfig.raidChannel);
         const playersInChannel = [...raidChannel.members.keys()];
 

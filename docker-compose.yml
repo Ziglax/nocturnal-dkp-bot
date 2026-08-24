@@ -21,7 +21,7 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      # Source code, configs, ./backups, ./error.log — live from the host.
+      # Source code, configs, ./backups, ./logs — live from the host.
       # - Code changes:       `docker compose restart dkp-bot`
       # - .env changes:       `docker compose up -d` (restart keeps creation-time env)
       # - Dependency changes: `docker compose up -d --build -V`

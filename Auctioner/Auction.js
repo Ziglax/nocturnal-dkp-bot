@@ -45,6 +45,27 @@ module.exports = class Auction {
         }
     }
 
+    // Withdraw a bid. Kept separate from bid() because validateBidAmount() rejects
+    // any amount <= 0 before it ever looks for an existing bid, so "bid 0 to cancel"
+    // can never travel through bid(). Mirrors DKPManager.removeBid for long auctions.
+    // Returns true when a bid was actually removed, false when the player had none.
+    removeBid(playerId) {
+        if (!this.auctionActive) {
+            throw new Error('Auction is not active');
+        }
+        const index = this.bids.findIndex(bid => bid.player === playerId);
+        if (index === -1) {
+            return false;
+        }
+        this.bids.splice(index, 1);
+        if (process.env.LOG_LEVEL === 'DEBUG') {
+            log(`Removing bid for ${this.item.name}`, {
+                player: playerId
+            });
+        }
+        return true;
+    }
+
     toObject() {
         return {
             id: this.id,

@@ -1,14 +1,16 @@
-# Stack complète pour NAS Synology DS1819+ (Atom C3538, pas d'instruction AVX) :
-# identique à docker-compose.yml, sauf MongoDB — les versions >= 5.0 exigent AVX
-# au démarrage, on utilise donc mongo:4.4, dernière version sans cette exigence
-# (EOL mais suffisante pour un banc de test). L'image 4.4 n'embarque pas mongosh :
-# le healthcheck passe par le shell `mongo`.
+# Full stack for a Synology DS1819+ NAS (Atom C3538, no AVX instructions).
+# Identical to docker-compose.yml except:
+#  - MongoDB: releases >= 5.0 require AVX to start, so this uses mongo:4.4, the
+#    last release without that requirement (EOL, but good enough for a test
+#    bench). The 4.4 image ships no mongosh, so the healthcheck goes through the
+#    legacy `mongo` shell instead.
+#  - No `logging:` section: see the note on the dkp-bot service below.
 #
-# Lancement sur le NAS (fichier autonome, un seul -f) :
+# Run it on the NAS (self-contained file, a single -f):
 #   sudo docker compose -f docker-compose.nas.yml up -d --build
 #
-# Pour l'interface Container Manager (DSM) : renommer ce fichier en
-# docker-compose.yml sur le NAS (en remplaçant celui de prod) et créer un projet.
+# For the Container Manager UI (DSM): rename this file to docker-compose.yml on
+# the NAS, replacing the production one, then create a project from it.
 services:
   dkp-bot:
     build: .
@@ -26,13 +28,13 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    # No `logging:` block on purpose. The Synology Docker daemon defaults to its own
+    # `db` log driver, and that driver is the only one Container Manager's "Log" tab
+    # can read: forcing json-file here (as docker-compose.yml does) leaves the tab
+    # empty, with no log file reachable from File Station either. Rotation is
+    # handled by Container Manager (Settings > Log).
     volumes:
-      # Source code, configs, ./backups, ./error.log — live from the host.
+      # Source code, configs, ./backups, ./logs — live from the host.
       # - Code changes:       `docker compose restart dkp-bot`
       # - .env changes:       `docker compose up -d` (restart keeps creation-time env)
       # - Dependency changes: `docker compose up -d --build -V`
@@ -50,11 +52,6 @@ services:
     restart: unless-stopped
     volumes:
       - mongo-data:/data/db
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     healthcheck:
       test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 10s

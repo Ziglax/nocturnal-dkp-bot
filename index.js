@@ -1,11 +1,25 @@
 const fs = require('node:fs');
 const path = require('node:path');
 require('dotenv').config()
-const { Client, Events, GatewayIntentBits, Collection, REST, Routes, PermissionFlagsBits } = require('discord.js');
+// File sink for console output (logs/bot.log, LOG_FILE to move or disable): right
+// after dotenv so every later line, boot failures included, lands in the file too.
+require('./utils/logfile.js').install();
+const { Client, Events, GatewayIntentBits, Collection, REST, Routes, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const DKPManager = require('./DKPManager/DKPManager.js');
 const Worker = require('./worker/Worker.js');
 const Logger = require('./utils/Logger');
 const Auctioner = require('./Auctioner/Auctioner.js');
+const { safeReply } = require('./utils/safe.js');
+
+// Process-level safety nets: a rejected promise or stray exception must not
+// kill the bot mid-raid. Log-only by policy (prod restarts are slow and lose
+// in-memory auctions); boot failures below still fail fast.
+process.on('unhandledRejection', (reason) => {
+	console.error('Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (error) => {
+	console.error('Uncaught exception:', error);
+});
 
 for (const key of ['DISCORD_TOKEN', 'DISCORD_CLIENT_ID', 'MONGO_URL']) {
 	if (!process.env[key]) {
@@ -31,6 +45,8 @@ const auctioner = new Auctioner(dkpManager);
 
 // Create a new client instance
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.DirectMessages] });
+client.on(Events.Error, (error) => console.error('Discord client error:', error));
+client.on(Events.ShardError, (error) => console.error('Discord shard error:', error));
 const worker = new Worker(client, dkpManager);
 const logger = new Logger(client);
 
@@ -56,7 +72,8 @@ client.on(Events.InteractionCreate, async interaction => {
 	if (!interaction.isChatInputCommand()) return;
 
 	if (!interaction.guild) {
-		await interaction.reply(`This command can only be used in a discord server`);
+		// Above the try block: needs its own crash protection.
+		await safeReply(interaction, { content: `This command can only be used in a discord server`, flags: MessageFlags.Ephemeral });
 		return;
 	}
 
@@ -74,20 +91,15 @@ client.on(Events.InteractionCreate, async interaction => {
 		if (command.restricted && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
 			const guildConfig = await dkpManager.getGuildOptions(interaction.guild.id);
 			if (!guildConfig || !interaction.member.roles.cache.has(guildConfig.adminRole)) {
-				interaction.reply(`You don't have the permission to use this command`);
+				await safeReply(interaction, { content: `You don't have the permission to use this command`, flags: MessageFlags.Ephemeral });
 				return;
 			}
 		}
 		await command.execute(interaction, dkpManager, logger);
 	} catch (error) {
-		console.error(error);
-		log(`Error executing command: ${interaction.commandName}`, error);
-		if (!fs.existsSync('error.log')) {
-			fs.writeFileSync('error.log', '');
-		}
-		const errorLog = `[${new Date().toLocaleString()}] ${error}\n`;
-		fs.appendFileSync('error.log', errorLog);
-		console.log(`Error executing command ${interaction.commandName}: ${error}`);
+		console.error(`Error executing command ${interaction.commandName}:`, error);
+		log(`Error executing command: ${interaction.commandName}`, error).catch(() => {});
+		await safeReply(interaction, { content: '⛔ Something went wrong running that command.', flags: MessageFlags.Ephemeral });
 	}
 });
 
@@ -120,5 +132,8 @@ client.once(Events.ClientReady, async c => {
 	worker.start();
 });
 
-client.login(token);
+client.login(token).catch((error) => {
+	console.error('Failed to log in to Discord:', error);
+	process.exit(1);
+});
 

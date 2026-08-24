@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits, ChannelType } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -24,20 +24,22 @@ module.exports = {
         const raidChannel = interaction.options.getChannel('raidchannel');
         const secondRaidChannel = interaction.options.getChannel('secondraidchannel');
         if (raidChannel.id === secondRaidChannel?.id) {
-            return interaction.reply({ content: ':prohibited: Raid channel and second raid channel must be different', ephemeral: true });
+            return interaction.reply({ content: ':prohibited: Raid channel and second raid channel must be different', flags: MessageFlags.Ephemeral });
         }
 
         const logChannel = interaction.options.getChannel('logchannel');
         const auctionChannel = interaction.options.getChannel('auctionchannel');
         const longAuctionChannel = interaction.options.getChannel('longauctionchannel');
         const role = interaction.options.getRole('role');
-        const raidDeprecationTime = interaction.options.getNumber('raiddeprecationtime') * 86400000 || guildConfig.raidDeprecationTime || 90;
+        const rdtDays = interaction.options.getNumber('raiddeprecationtime');
+        const raidDeprecationTime = rdtDays != null ? rdtDays * 86400000 : (guildConfig.raidDeprecationTime ?? 90 * 86400000);
         const bidTime = interaction.options.getInteger('bidtime') || guildConfig.bidTime || 60;
         const minBid = interaction.options.getInteger('minbid') || guildConfig.minBid || 0;
         const minBidToLockForMain = interaction.options.getInteger('minbidtolockformain') || guildConfig.minBidToLockForMain;
         const overBidtoWinMain = interaction.options.getInteger('overbidtowinmain') || guildConfig.overBidtoWinMain;
         const raidHelperAPIKey = interaction.options.getString('raidhelperapikey') || guildConfig.raidHelperAPIKey;
-        const tickDuration = interaction.options.getNumber('tickduration') * 60000 || guildConfig.tickDuration;
+        const tickMinutes = interaction.options.getNumber('tickduration');
+        const tickDuration = tickMinutes != null ? tickMinutes * 60000 : guildConfig.tickDuration;
         await manager.saveGuildOptions(guild, {
             raidChannel: raidChannel.id,
             adminRole: role.id,
@@ -54,7 +56,7 @@ module.exports = {
             tickDuration,
         });
 
-        await interaction.reply({ content: 'Configuration saved', ephemeral: true });
+        await interaction.reply({ content: 'Configuration saved', flags: MessageFlags.Ephemeral });
     },
     restricted: true,
 };
