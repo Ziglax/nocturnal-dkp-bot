@@ -11,6 +11,7 @@ const Logger = require('./utils/Logger');
 const Auctioner = require('./Auctioner/Auctioner.js');
 const { safeReply } = require('./utils/safe.js');
 const { handleLongAuctionBid } = require('./utils/longAuctionBid.js');
+const { handleLongAuctionConfirm } = require('./utils/longAuctionConfirm.js');
 
 // Process-level safety nets: a rejected promise or stray exception must not
 // kill the bot mid-raid. Log-only by policy (prod restarts are slow and lose
@@ -79,6 +80,17 @@ client.on(Events.InteractionCreate, async interaction => {
 			await handleLongAuctionBid(interaction, dkpManager);
 		} catch (error) {
 			console.error('[long auction bid]', error);
+		}
+		return;
+	}
+
+	// Same story for the Confirm button of a closed long auction: the worker closes
+	// it long after the command that started it has gone, so no collector owns it.
+	if (interaction.isButton() && interaction.customId.startsWith('lconfirm_')) {
+		try {
+			await handleLongAuctionConfirm(interaction, dkpManager, logger);
+		} catch (error) {
+			console.error('[long auction confirm]', error);
 		}
 		return;
 	}

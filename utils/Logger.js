@@ -2,6 +2,7 @@ const { ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, MessageFlag
 const Auctioner = require('../Auctioner/Auctioner');
 const uniqid = require('uniqid');
 const { safeReply, safeAck, guardListener } = require('./safe.js');
+const { lockDelayOf } = require('./auctionDebit.js');
 
 //list of discord colors
 const colors = {
@@ -276,8 +277,21 @@ module.exports = class Logger {
             new ButtonBuilder().setCustomId(`lbid_alt_${auction._id}`).setLabel('Alt bid').setStyle(ButtonStyle.Secondary),
         );
 
+        // Built as sentences rather than one template so an omitted one does not leave
+        // a double space behind. Bidders see the end time on the embed, so the wait
+        // between that time and the results being posted has to be advertised too -
+        // otherwise a block of offline auctions looks stuck for twenty minutes.
+        const lockDelay = lockDelayOf(auction);
+        const sentences = [`Bid started - **${minBid} DKP** minimum bid.`];
+        if (numberOfItems > 1) {
+            sentences.push(`Top **${numberOfItems}** bids win. Should end at <t:${Math.floor(auction.auctionEnd / 1000)}:f>`);
+        }
+        if (lockDelay > 0) {
+            sentences.push(`Results are posted about **${Math.round(lockDelay / 60000)} minutes** after the end.`);
+        }
+
         const message = await channel.send({
-            content: `Bid started - **${minBid} DKP** minimum bid. ${numberOfItems > 1 ? `Top **${numberOfItems}** bids win. Should end at <t:${Math.floor(auction.auctionEnd / 1000)}:f>` : ''}`,
+            content: sentences.join(' '),
             embeds: [embed],
             components: [row]
         })
@@ -285,7 +299,12 @@ module.exports = class Logger {
         return message.id;
     }
 
-    async updateLongAuctionEmbed(guildOptions, auction) {
+    // debitReport is what debitAuctionWinners just returned, or null when nothing was
+    // attempted on this pass. It only refines the wording of a line: whether a winner
+    // was actually taken is read from auction.debitedPlayers, which the caller refreshes
+    // from the database first. A debit that failed and handed its claim back shows up
+    // in nothing else.
+    async updateLongAuctionEmbed(guildOptions, auction, debitReport = null) {
         //using discordJS update the message embed fields
         const longAuctionChannel = guildOptions.longAuctionChannel || guildOptions.auctionChannel;
         const messageId = auction.messageId;
@@ -322,11 +341,48 @@ module.exports = class Logger {
                 inline: false
             })
 
+            // Whether the winners paid is the one thing the recap could not say before,
+            // and an officer had to go and check /dkphistory by hand.
+            const winners = auction.winners || [];
+            const debited = new Set(auction.debitedPlayers || []);
+            const reportByPlayer = new Map((debitReport || []).map(entry => [entry.player, entry]));
+            if (winners.length) {
+                embed.fields.push({
+                    name: 'DKP',
+                    value: this.embedFieldValue(winners.map((winner) => {
+                        if (debited.has(winner.player)) {
+                            return `:white_check_mark: <@${winner.player}> - ${winner.amount} DKP taken`;
+                        }
+                        // No claim on the auction means nothing was taken, whatever the
+                        // reason. The report only says which reason to print.
+                        const status = reportByPlayer.get(winner.player)?.status;
+                        if (status === 'insufficient') {
+                            return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, balance too low`;
+                        }
+                        if (status === 'error') {
+                            return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, the write failed`;
+                        }
+                        return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, an officer must confirm`;
+                    })),
+                    inline: false
+                })
+            }
+
             // Clearing the components is what retires the bid buttons: they are not
-            // owned by a collector that could expire on its own.
+            // owned by a collector that could expire on its own. A winner still owing
+            // DKP gets a Confirm in their place - the auction was started with autodebit
+            // off, or its automatic debit could not go through. Pressing it is safe to
+            // repeat: the debit is claimed on the auction, so a winner already taken is
+            // skipped.
+            const components = winners.some(winner => !debited.has(winner.player))
+                ? [new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`lconfirm_${auction._id}`).setLabel('Confirm DKP').setStyle(ButtonStyle.Success),
+                )]
+                : [];
+
             await message.edit({
                 embeds: [embed],
-                components: []
+                components
             })
         } catch (e) {
             console.log(e);

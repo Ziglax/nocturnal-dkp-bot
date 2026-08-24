@@ -1,6 +1,7 @@
 const Logger = require('../utils/Logger');
 const Auction = require('../Auctioner/Auction');
 const log = require('../debugger.js');
+const { lockDelayOf, autoDebitOf, debitAuctionWinners } = require('../utils/auctionDebit.js');
 
 module.exports = class Worker {
     constructor(client, manager) {
@@ -110,8 +111,14 @@ module.exports = class Worker {
                 continue;
             }
 
-            const extraTimeBeforeReporting = 1000 * 60 * 20; //20 minutes
-            const finishedActiveAuctions = activeAuctions.filter(auction => auction.auctionEnd < new Date().getTime() - extraTimeBeforeReporting);
+            // A finished auction keeps its results hidden for its lock delay before
+            // the bot closes it and publishes the winners. Blocks of offline auctions
+            // are run side by side, and revealing the first results while the last
+            // auctions are still open would tell the remaining bidders exactly what
+            // to bid. Per-auction since /startlongbid gained its lockdelay option;
+            // an auction started before it keeps the twenty minutes it ran under.
+            const now = new Date().getTime();
+            const finishedActiveAuctions = activeAuctions.filter(auction => auction.auctionEnd + lockDelayOf(auction) < now);
 
             for (const auctionData of finishedActiveAuctions) {
                 try {
@@ -135,7 +142,32 @@ module.exports = class Worker {
                         winners: auctionData.winners,
                     });
                     await this.manager.endAuction(guildOptions.guild, auctionData._id, auctionData.winners);
-                    this.logger.updateLongAuctionEmbed(guildOptions, auctionData);
+
+                    // endAuction is what makes the debit legal: claimAuctionDebit only
+                    // matches an auction that is already closed, so nothing can be taken
+                    // from a winner while the auction could still change.
+                    let debitReport = null;
+                    if (autoDebitOf(auctionData) && auctionData.winners.length) {
+                        // Whatever raid is running right now, which is the raid a manual
+                        // /removedkp would have logged the debit against. Usually none:
+                        // a long auction closes days after the raid it came from.
+                        const raid = await this.manager.getActiveRaid(guildOptions.guild).catch((e) => {
+                            console.error('[worker] active raid lookup failed for an auction debit', auctionData._id, e?.message || e);
+                            return null;
+                        });
+                        debitReport = await debitAuctionWinners(this.manager, guildOptions.guild, auctionData, auctionData.winners, raid);
+                    }
+
+                    // The recap names who was debited, and it has to read that back from
+                    // the auction rather than trust the report above: a debit that failed
+                    // and handed its claim back between the two shows up only here.
+                    auctionData.debitedPlayers = await this.manager.getAuction(guildOptions.guild, auctionData._id)
+                        .then(fresh => fresh.debitedPlayers || [])
+                        .catch((e) => {
+                            console.error('[worker] could not re-read the auction for its recap', auctionData._id, e?.message || e);
+                            return auctionData.debitedPlayers || [];
+                        });
+                    await this.logger.updateLongAuctionEmbed(guildOptions, auctionData, debitReport);
                 } catch (e) {
                     console.error('[worker] auction close failed', guildOptions.guild, auctionData?._id, e);
                 }

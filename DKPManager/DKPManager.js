@@ -1,4 +1,5 @@
 const { ObjectId } = require("mongodb");
+const { DEFAULT_LOCK_DELAY } = require("../utils/auctionDebit.js");
 
 module.exports = class DKPManager {
     constructor(dbClient) {
@@ -261,7 +262,7 @@ module.exports = class DKPManager {
         return this.guildOptions.findOne({ guild });
     }
 
-    async createAution(guild, item, minBid, numberOfItems, minBidToLockForMain, overBidtoWinMain, duration) {
+    async createAution(guild, item, minBid, numberOfItems, minBidToLockForMain, overBidtoWinMain, duration, autoDebit = true, lockDelay = DEFAULT_LOCK_DELAY) {
         const auction = {
             guild,
             item,
@@ -273,6 +274,12 @@ module.exports = class DKPManager {
             auctionActive: true,
             createdAt: new Date().getTime(),
             auctionEnd: new Date().getTime() + duration,
+            // The three fields below are additive: an auction document written
+            // before they existed simply does not carry them, and every reader
+            // defaults it back to the behaviour it was started under.
+            autoDebit,
+            lockDelay,
+            debitedPlayers: [],
         };
 
         const result = await this.auctions.insertOne(auction);
@@ -315,6 +322,29 @@ module.exports = class DKPManager {
         }
 
         return this.auctions.updateOne({ _id: auction._id, guild }, { $set: { auctionActive: false, winners } });
+    }
+
+    // One winner, one debit. debitedPlayers is the auction's own record of who has
+    // already been taken, and $addToSet behind a `debitedPlayers: {$ne: player}`
+    // filter is a single atomic update: when the worker's automatic debit and an
+    // officer's Confirm land together, exactly one of them comes back with
+    // modifiedCount 1 and goes on to write the DKP.
+    // Only a closed auction can be debited, hence the auctionActive guard.
+    async claimAuctionDebit(guild, auctionId, player) {
+        const result = await this.auctions.updateOne(
+            { _id: new ObjectId(auctionId), guild, auctionActive: false, debitedPlayers: { $ne: player } },
+            { $addToSet: { debitedPlayers: player } },
+        );
+        return result.modifiedCount === 1;
+    }
+
+    // Hands a claim back when the debit behind it did not go through, so Confirm can
+    // be pressed again once the balance is there.
+    async releaseAuctionDebit(guild, auctionId, player) {
+        return this.auctions.updateOne(
+            { _id: new ObjectId(auctionId), guild },
+            { $pull: { debitedPlayers: player } },
+        );
     }
 
     async removeBid(guild, auctionId, player) {

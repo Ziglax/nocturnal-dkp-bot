@@ -4,6 +4,7 @@ const Auctioner = require('../Auctioner/Auctioner');
 const { playSound } = require('../utils/Player.js');
 const client = require('../db');
 const { safeAck, safeReply } = require('../utils/safe.js');
+const { DEFAULT_LOCK_DELAY } = require('../utils/auctionDebit.js');
 
 const itemSearch = new ItemSearch();
 
@@ -27,6 +28,8 @@ module.exports = {
         .addIntegerOption(option => option.setName('minbid').setDescription('Minimum bid').setMinValue(0).setRequired(false))
         .addIntegerOption(option => option.setName('numitems').setDescription('Number of items').setMinValue(1).setRequired(false))
         .addIntegerOption(option => option.setName('duration').setDescription('Hours of bid').setRequired(false))
+        .addBooleanOption(option => option.setName('autodebit').setDescription('Take the winners DKP automatically when the auction closes (default: yes)').setRequired(false))
+        .addIntegerOption(option => option.setName('lockdelay').setDescription('Minutes the results stay hidden after the end (default: 20)').setMinValue(0).setMaxValue(1440).setRequired(false))
         .addStringOption(option => option.setName('database').setDescription('quarm | takp').setRequired(false)),
     async execute(interaction, manager, logger) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -37,6 +40,10 @@ module.exports = {
 
         const minBid = interaction.options.getInteger('minbid') || guildConfig.minBid || 0;
         const numberOfItems = interaction.options.getInteger('numitems') || 1;
+        // ?? rather than ||: false and 0 are both meaningful answers here, and || would
+        // read them as "not given" and hand back the default.
+        const autoDebit = interaction.options.getBoolean('autodebit') ?? true;
+        const lockDelayMinutes = interaction.options.getInteger('lockdelay') ?? DEFAULT_LOCK_DELAY / 60000;
         const database = interaction.options.getString('database') || 'quarm';
 
         if (database !== 'quarm' && database !== 'takp') {
@@ -109,7 +116,7 @@ module.exports = {
 
                     const duration = hours * 60 * 60 * 1000;
                     //guild, item, minBid, numberOfItems, minBidToLockForMain, overBidtoWinMain, duration = 48
-                    const auction = await manager.createAution(guild.id, item, minBid, numberOfItems, guildConfig.minBidToLockForMain, guildConfig.overBidtoWinMain, duration);
+                    const auction = await manager.createAution(guild.id, item, minBid, numberOfItems, guildConfig.minBidToLockForMain, guildConfig.overBidtoWinMain, duration, autoDebit, lockDelayMinutes * 60 * 1000);
                     const messageId = await logger.sendLongAuctionEmbed(guildConfig, auction, minBid, numberOfItems);
                     if (messageId) {
                         await manager.updateAuctionMessageId(guild.id, auction._id, messageId);
