@@ -1,8 +1,6 @@
 const Logger = require('../utils/Logger');
-const Auction = require('../Auctioner/Auction');
-const log = require('../debugger.js');
-const { lockDelayOf, autoDebitOf, debitAuctionWinners, beginSettlement, endSettlement } = require('../utils/auctionDebit.js');
-const { settleAuctionWinners, skippedEntries } = require('../utils/auctionReassign.js');
+const { lockDelayOf } = require('../utils/auctionDebit.js');
+const { closeLongAuction } = require('../utils/auctionClose.js');
 
 module.exports = class Worker {
     constructor(client, manager) {
@@ -10,6 +8,7 @@ module.exports = class Worker {
         this.manager = manager;
         this.logger = new Logger(client);
         this.ticking = new Set();
+        this.auctioning = new Set();
     }
 
     async start() {
@@ -107,92 +106,45 @@ module.exports = class Worker {
 
     async processAuctions(guilds) {
         for (const guildOptions of guilds) {
-            const activeAuctions = await this.manager.getActiveAuctions(guildOptions.guild);
-            if (activeAuctions.length === 0) {
+            // The same shape as the raid tick guard, and held across the read for the
+            // same reason: the medium tick fires every minute, and a block of long
+            // auctions closing together takes as long as it takes. Without this, the
+            // next tick reads the very same auctions - still active, because the first
+            // tick has not reached them yet - and closes them twice. endAuction is a
+            // compare-and-swap now, so the loser refuses rather than pays twice; the
+            // guard is what stops it re-reading every bidder to arrive at that refusal.
+            if (this.auctioning.has(guildOptions.guild)) {
+                console.log(`[worker] auction close skipped, previous close still running for guild ${guildOptions.guild}`);
                 continue;
             }
-
-            // A finished auction keeps its results hidden for its lock delay before
-            // the bot closes it and publishes the winners. Blocks of offline auctions
-            // are run side by side, and revealing the first results while the last
-            // auctions are still open would tell the remaining bidders exactly what
-            // to bid. Per-auction since /startlongbid gained its lockdelay option;
-            // an auction started before it keeps the twenty minutes it ran under.
-            const now = new Date().getTime();
-            const finishedActiveAuctions = activeAuctions.filter(auction => auction.auctionEnd + lockDelayOf(auction) < now);
-
-            for (const auctionData of finishedActiveAuctions) {
-                try {
-                    //instantaite a new auction from ../Auctioner/Auction.js
-                    const auction = new Auction(auctionData.guild, auctionData.item, auctionData.minBid, auctionData.numberOfItems, auctionData.minBidToLockForMain, auctionData.overBidtoWinMain);
-                    auction.bids = auctionData.bids;
-                    // A bidder who left / was never registered is dropped; any other error (DB down) aborts this
-                    // auction's close so it is retried next cycle instead of closing with a wrong winner.
-                    const players = (await Promise.all(auction.bids.map(bid => this.manager.getPlayer(auctionData.guild, bid.player, false).catch(e => {
-                        if (e?.message === 'Player not found') return null;
-                        throw e;
-                    })))).filter(Boolean);
-                    const w = auction.calculateWinner(players);
-                    auctionData.winners = [];
-                    if (w) {
-                        auctionData.winners = w.length ? w : [w];
-                    }
-                    log('Auction ended', {
-                        guild: auctionData.guild,
-                        item: auctionData.item.name,
-                        winners: auctionData.winners,
-                    });
-                    await this.manager.endAuction(guildOptions.guild, auctionData._id, auctionData.winners);
-
-                    // endAuction is what makes the debit legal: claimAuctionDebit only
-                    // matches an auction that is already closed, so nothing can be taken
-                    // from a winner while the auction could still change.
-                    let debitReport = null;
-                    // Belt and braces next to the per-guild reentrance guard: this is the
-                    // same lock an officer's Confirm takes, so an automatic debit and a
-                    // manual one can never settle the same auction side by side.
-                    if (autoDebitOf(auctionData) && auctionData.winners.length && beginSettlement(auctionData._id)) {
-                        try {
-                            // Whatever raid is running right now, which is the raid a manual
-                            // /removedkp would have logged the debit against. Usually none:
-                            // a long auction closes days after the raid it came from.
-                            const raid = await this.manager.getActiveRaid(guildOptions.guild).catch((e) => {
-                                console.error('[worker] active raid lookup failed for an auction debit', auctionData._id, e?.message || e);
-                                return null;
-                            });
-                            // A winner who cannot cover their bid loses the item to the next
-                            // bid down. auction.bids is the list calculateWinner already
-                            // pruned, so only bids that were valid at the close are offered.
-                            const settled = await settleAuctionWinners({
-                                winners: auctionData.winners,
-                                bids: auction.bids,
-                                rules: auction,
-                                debit: winner => debitAuctionWinners(this.manager, guildOptions.guild, auctionData, [winner], raid).then(([entry]) => entry),
-                            });
-                            debitReport = settled.report.concat(skippedEntries(settled.skipped));
-                            if (settled.changed) {
-                                auctionData.winners = settled.winners;
-                                await this.manager.setAuctionWinners(guildOptions.guild, auctionData._id, settled.winners)
-                                    .catch(e => console.error('[worker] could not record the new auction winner/s', auctionData._id, e?.message || e));
-                            }
-                        } finally {
-                            endSettlement(auctionData._id);
-                        }
-                    }
-
-                    // The recap names who was debited, and it has to read that back from
-                    // the auction rather than trust the report above: a debit that failed
-                    // and handed its claim back between the two shows up only here.
-                    auctionData.debitedPlayers = await this.manager.getAuction(guildOptions.guild, auctionData._id)
-                        .then(fresh => fresh.debitedPlayers || [])
-                        .catch((e) => {
-                            console.error('[worker] could not re-read the auction for its recap', auctionData._id, e?.message || e);
-                            return auctionData.debitedPlayers || [];
-                        });
-                    await this.logger.updateLongAuctionEmbed(guildOptions, auctionData, debitReport);
-                } catch (e) {
-                    console.error('[worker] auction close failed', guildOptions.guild, auctionData?._id, e);
+            this.auctioning.add(guildOptions.guild);
+            try {
+                const activeAuctions = await this.manager.getActiveAuctions(guildOptions.guild);
+                if (activeAuctions.length === 0) {
+                    continue;
                 }
+
+                // A finished auction keeps its results hidden for its lock delay before
+                // the bot closes it and publishes the winners. Blocks of offline auctions
+                // are run side by side, and revealing the first results while the last
+                // auctions are still open would tell the remaining bidders exactly what
+                // to bid. Per-auction since /startlongbid gained its lockdelay option;
+                // an auction started before it keeps the twenty minutes it ran under.
+                const now = new Date().getTime();
+                const finishedActiveAuctions = activeAuctions.filter(auction => auction.auctionEnd + lockDelayOf(auction) < now);
+
+                for (const auctionData of finishedActiveAuctions) {
+                    // One auction failing does not stop the block: they are independent,
+                    // and the next tick picks this one up again. A close that lost the race
+                    // to /cancelauction or to /endauction arrives here too, as the throw
+                    // from endAuction.
+                    await closeLongAuction(this.manager, this.logger, guildOptions, auctionData)
+                        .catch(e => console.error('[worker] auction close failed', guildOptions.guild, auctionData?._id, e));
+                }
+            } catch (e) {
+                console.error('[worker] active auction lookup failed', guildOptions.guild, e);
+            } finally {
+                this.auctioning.delete(guildOptions.guild);
             }
         }
     }
