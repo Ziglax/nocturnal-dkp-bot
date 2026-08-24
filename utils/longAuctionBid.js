@@ -1,6 +1,7 @@
 const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, MessageFlags } = require('discord.js');
 const uniqid = require('uniqid');
 const { safeReply } = require('./safe.js');
+const { openBidModal, closeBidModal, bidErrorMessage } = require('./bidModals.js');
 const log = require('../debugger.js');
 
 /**
@@ -54,13 +55,17 @@ const handleLongAuctionBid = async (interaction, manager) => {
 
     // Capped at the 15 minutes Discord keeps a modal open. The auction end is not
     // pre-checked: manager.bid and manager.removeBid both refuse a late one with
-    // 'Auction has ended', and one round trip less keeps this path short. A
-    // dismissed modal rejects here, which is not an error - it resolves to null and
-    // the click is dropped.
+    // 'Auction has ended', which bidErrorMessage turns into something a player can
+    // read, and one round trip less keeps this path short. A dismissed modal rejects
+    // here, which is not an error - it resolves to null and the click is dropped.
+    // The id is registered for as long as this collector waits, so index.js can tell
+    // an orphaned submission - bot restarted, or more than 15 minutes gone by - from
+    // one that is about to be answered right here.
+    openBidModal(modalId);
     const submitted = await interaction.awaitModalSubmit({
         time: 15 * 60 * 1000,
         filter: m => m.customId === modalId && m.user.id === interaction.user.id,
-    }).catch(() => null);
+    }).catch(() => null).finally(() => closeBidModal(modalId));
     if (!submitted) {
         return;
     }
@@ -107,7 +112,10 @@ const handleLongAuctionBid = async (interaction, manager) => {
         // could not tell which one an unqualified "Bid placed" answered.
         await safeReply(submitted, { content: `${forMain ? 'MAIN' : 'ALT'} bid of **${amount} DKP** placed on **${itemName}**`, flags: MessageFlags.Ephemeral });
     } catch (e) {
-        await safeReply(submitted, { content: e.message, flags: MessageFlags.Ephemeral });
+        // A bid or a withdrawal that arrives after the end is the common case here,
+        // and 'Auction has ended' on its own tells the player nothing about which
+        // auction, or that their DKP is untouched.
+        await safeReply(submitted, { content: bidErrorMessage(e, itemName), flags: MessageFlags.Ephemeral });
     }
 };
 

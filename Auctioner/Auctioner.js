@@ -80,6 +80,16 @@ class Auctioner {
         if (!auction || !auction.auctionActive) {
             return false;
         }
+        // Set BEFORE endAuction, not after. endAuction only clears auctionActive,
+        // which is indistinguishable from the timer expiring - which is why a bidder
+        // whose auction was pulled was told it had ended. Everything downstream reads
+        // the flag to tell those two apart, so it must never be possible to observe
+        // the auction inactive but not yet marked cancelled. Nothing suspends between
+        // these two lines today; this ordering means nothing has to.
+        //
+        // In memory only, and never persisted: a cancelled auction is not stored at
+        // all, and storeShortAuction builds its document field by field.
+        auction.cancelled = true;
         auction.endAuction();
         this.removeAuction(auctionId);
         return true;

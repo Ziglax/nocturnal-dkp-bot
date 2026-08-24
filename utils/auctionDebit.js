@@ -86,4 +86,36 @@ const debitAuctionWinners = async (manager, guild, auction, winners, raid) => {
     return report;
 };
 
-module.exports = { DEFAULT_LOCK_DELAY, lockDelayOf, autoDebitOf, debitAuctionWinner, debitAuctionWinners };
+/**
+ * The settlement of one auction, held for as long as it runs.
+ *
+ * claimAuctionDebit interlocks two callers racing over the same winner, and while
+ * the winners were fixed at the close that was also an interlock on the item:
+ * every caller debited the identical list, so claiming the player claimed the
+ * item. Handing an item down to the next bid breaks that. Two callers refused by
+ * the same insolvent winner each pick their own replacement, and equal bids are
+ * drawn at random (Auction.getWinners), so they can settle on two different
+ * players, claim two different players and take DKP from both for one item.
+ *
+ * The bot is a single process, so one Set is enough to make settling exclusive.
+ * A caller that cannot take it does nothing at all - it must not fall through and
+ * settle anyway, which is the whole point.
+ */
+const settling = new Set();
+
+const beginSettlement = (auctionId) => {
+    const key = String(auctionId);
+    if (settling.has(key)) {
+        return false;
+    }
+    settling.add(key);
+    return true;
+};
+
+// Always from a finally: a settlement that throws still has to give the lock back,
+// or the auction can never be confirmed again without a restart.
+const endSettlement = (auctionId) => {
+    settling.delete(String(auctionId));
+};
+
+module.exports = { DEFAULT_LOCK_DELAY, lockDelayOf, autoDebitOf, debitAuctionWinner, debitAuctionWinners, beginSettlement, endSettlement };

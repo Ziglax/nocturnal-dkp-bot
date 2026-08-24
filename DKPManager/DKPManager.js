@@ -324,6 +324,19 @@ module.exports = class DKPManager {
         return this.auctions.updateOne({ _id: auction._id, guild }, { $set: { auctionActive: false, winners } });
     }
 
+    // Rewrites the winners of an auction that is already closed, which endAuction
+    // refuses to do. The winner picked at the close can turn out to be unable to
+    // pay by the time the DKP are actually taken, and the item then goes down the
+    // bid list - a change that has to be recorded, because this field is what the
+    // auction message, /auctiondetails and every outside reader are drawn from.
+    // Only the existing winners field is touched; nothing is added to the document.
+    async setAuctionWinners(guild, auctionId, winners) {
+        return this.auctions.updateOne(
+            { _id: new ObjectId(auctionId), guild, auctionActive: false },
+            { $set: { winners } },
+        );
+    }
+
     // One winner, one debit. debitedPlayers is the auction's own record of who has
     // already been taken, and $addToSet behind a `debitedPlayers: {$ne: player}`
     // filter is a single atomic update: when the worker's automatic debit and an

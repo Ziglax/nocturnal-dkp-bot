@@ -4,6 +4,7 @@ const Auctioner = require('../Auctioner/Auctioner');
 const { playSound } = require('../utils/Player.js');
 const log = require('../debugger.js');
 const { safeAck, safeReply } = require('../utils/safe.js');
+const { settleAuctionWinners } = require('../utils/auctionReassign.js');
 
 const itemSearch = new ItemSearch();
 
@@ -129,7 +130,11 @@ module.exports = {
                                 },
                             ];
 
+                            // Same reason the cancel path rewrites it: without an explicit
+                            // content the closed auction goes on announcing itself as
+                            // 'Bid started - X DKP minimum bid' in the channel list.
                             await message.edit({
+                                content: `Auction ended on **${auction.item.name}**`,
                                 embeds: [embed],
                                 components: auction.winner || auction.winners.length ? [row] : []
                             });
@@ -150,33 +155,66 @@ module.exports = {
                                             }).catch(e => console.error(e));
 
                                             const raid = await manager.getActiveRaid(guild.id);
-                                            const winners = auction.winner ? [auction.winner] : auction.winners;
-                                            const notDebited = [];
-                                            for (const winner of winners) {
-                                                current = winner;
-                                                const updated = await manager.removeDKP(guild.id, winner.player, winner.amount, auction.item.name, raid, auction.item);
-                                                if (!updated) {
-                                                    // removeDKP refuses a debit the balance cannot cover and writes
-                                                    // nothing when it does, so this winner still owes the DKP. The
-                                                    // bid was checked against a balance read when it was placed,
-                                                    // which another debit can have spent since.
-                                                    console.error('confirm winners: balance too low, not debited', auction.id, winner.player, winner.amount);
-                                                    notDebited.push(winner);
-                                                    continue;
+                                            const announced = auction.winner ? [auction.winner] : auction.winners;
+
+                                            // The bid was checked against a balance read when it was placed,
+                                            // and again when the auction closed. Neither covers the minutes
+                                            // this button waits to be pressed: removeDKP refuses a debit the
+                                            // balance cannot cover, and refusing writes nothing. The item then
+                                            // goes to the next bid down rather than staying unsold.
+                                            const settled = await settleAuctionWinners({
+                                                winners: announced,
+                                                bids: auction.bids,
+                                                rules: auction,
+                                                debit: async (winner) => {
+                                                    current = winner;
+                                                    const updated = await manager.removeDKP(guild.id, winner.player, winner.amount, auction.item.name, raid, auction.item);
+                                                    if (!updated) {
+                                                        console.error('confirm winners: balance too low, not debited', auction.id, winner.player, winner.amount);
+                                                        return { player: winner.player, amount: winner.amount, status: 'insufficient' };
+                                                    }
+                                                    if (process.env.LOG_LEVEL === 'DEBUG') {
+                                                        log('Removing dkps from winer', {
+                                                            player: winner.player,
+                                                            amount: winner.amount,
+                                                            item: auction.item.name
+                                                        });
+                                                    }
+                                                    return { player: winner.player, amount: winner.amount, status: 'debited' };
+                                                },
+                                            });
+
+                                            const notDebited = settled.winners.filter((_winner, index) => settled.report[index]?.status !== 'debited');
+
+                                            if (settled.changed) {
+                                                // The stored auction is what /auctiondetails and anything
+                                                // reading the database see, so the new winner is written
+                                                // there too - not only announced on the message.
+                                                if (auction._id) {
+                                                    await manager.setAuctionWinners(guild.id, auction._id, settled.winners)
+                                                        .catch(e => console.error('confirm winners: could not record the new winner/s', auction.id, e?.message || e));
                                                 }
-                                                if (process.env.LOG_LEVEL === 'DEBUG') {
-                                                    log('Removing dkps from winer', {
-                                                        player: winner.player,
-                                                        amount: winner.amount,
-                                                        item: auction.item.name
-                                                    });
+                                                if (auction.winner) {
+                                                    auction.winner = settled.winners[0];
+                                                } else {
+                                                    auction.winners = settled.winners;
                                                 }
+                                                embed.fields[0] = { name: 'Winner/s', value: winnerMessage(auction) };
                                             }
 
+                                            const notices = [];
+                                            if (settled.skipped.length) {
+                                                notices.push(`:arrow_down: Skipped, balance too low: ${settled.skipped.map(s => `<@${s.player}> (${s.amount} DKP)`).join(', ')}. The item went to the next bid down.`);
+                                            }
                                             if (notDebited.length) {
                                                 confirmButton.setLabel('Not enough DKP - see message').setStyle(ButtonStyle.Danger);
+                                                notices.push(`:warning: Not debited, balance too low: ${notDebited.map(w => `<@${w.player}> (${w.amount} DKP)`).join(', ')}. Take it by hand with \`/removedkp\` once they can cover it.`);
+                                            }
+
+                                            if (notices.length || settled.changed) {
                                                 await message.edit({
-                                                    content: `:warning: Not debited, balance too low: ${notDebited.map(w => `<@${w.player}> (${w.amount} DKP)`).join(', ')}. Take it by hand with \`/removedkp\` once they can cover it.`,
+                                                    content: notices.join('\n'),
+                                                    embeds: [embed],
                                                     components: [row]
                                                 }).catch(e => console.error(e));
                                             }

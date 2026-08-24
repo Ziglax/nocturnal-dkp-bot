@@ -1,7 +1,8 @@
 const Logger = require('../utils/Logger');
 const Auction = require('../Auctioner/Auction');
 const log = require('../debugger.js');
-const { lockDelayOf, autoDebitOf, debitAuctionWinners } = require('../utils/auctionDebit.js');
+const { lockDelayOf, autoDebitOf, debitAuctionWinners, beginSettlement, endSettlement } = require('../utils/auctionDebit.js');
+const { settleAuctionWinners, skippedEntries } = require('../utils/auctionReassign.js');
 
 module.exports = class Worker {
     constructor(client, manager) {
@@ -147,15 +148,36 @@ module.exports = class Worker {
                     // matches an auction that is already closed, so nothing can be taken
                     // from a winner while the auction could still change.
                     let debitReport = null;
-                    if (autoDebitOf(auctionData) && auctionData.winners.length) {
-                        // Whatever raid is running right now, which is the raid a manual
-                        // /removedkp would have logged the debit against. Usually none:
-                        // a long auction closes days after the raid it came from.
-                        const raid = await this.manager.getActiveRaid(guildOptions.guild).catch((e) => {
-                            console.error('[worker] active raid lookup failed for an auction debit', auctionData._id, e?.message || e);
-                            return null;
-                        });
-                        debitReport = await debitAuctionWinners(this.manager, guildOptions.guild, auctionData, auctionData.winners, raid);
+                    // Belt and braces next to the per-guild reentrance guard: this is the
+                    // same lock an officer's Confirm takes, so an automatic debit and a
+                    // manual one can never settle the same auction side by side.
+                    if (autoDebitOf(auctionData) && auctionData.winners.length && beginSettlement(auctionData._id)) {
+                        try {
+                            // Whatever raid is running right now, which is the raid a manual
+                            // /removedkp would have logged the debit against. Usually none:
+                            // a long auction closes days after the raid it came from.
+                            const raid = await this.manager.getActiveRaid(guildOptions.guild).catch((e) => {
+                                console.error('[worker] active raid lookup failed for an auction debit', auctionData._id, e?.message || e);
+                                return null;
+                            });
+                            // A winner who cannot cover their bid loses the item to the next
+                            // bid down. auction.bids is the list calculateWinner already
+                            // pruned, so only bids that were valid at the close are offered.
+                            const settled = await settleAuctionWinners({
+                                winners: auctionData.winners,
+                                bids: auction.bids,
+                                rules: auction,
+                                debit: winner => debitAuctionWinners(this.manager, guildOptions.guild, auctionData, [winner], raid).then(([entry]) => entry),
+                            });
+                            debitReport = settled.report.concat(skippedEntries(settled.skipped));
+                            if (settled.changed) {
+                                auctionData.winners = settled.winners;
+                                await this.manager.setAuctionWinners(guildOptions.guild, auctionData._id, settled.winners)
+                                    .catch(e => console.error('[worker] could not record the new auction winner/s', auctionData._id, e?.message || e));
+                            }
+                        } finally {
+                            endSettlement(auctionData._id);
+                        }
                     }
 
                     // The recap names who was debited, and it has to read that back from

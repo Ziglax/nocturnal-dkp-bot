@@ -3,10 +3,11 @@ const Auctioner = require('../Auctioner/Auctioner');
 const uniqid = require('uniqid');
 const { safeReply, safeAck, guardListener } = require('./safe.js');
 const { lockDelayOf } = require('./auctionDebit.js');
+const { openBidModal, closeBidModal, auctionOverMessage, bidErrorMessage } = require('./bidModals.js');
 
 //list of discord colors
 const colors = {
-    red: 15105570,
+    red: 15158332,
     green: 3066993,
     blue: 3447003,
     yellow: 16776960,
@@ -323,8 +324,8 @@ module.exports = class Logger {
                     inline: true
                 },
                 {
-                    name: 'Auction ends',
-                    value: `<t:${Math.floor(auction.auctionEnd / 1000)}:R>`,
+                    name: 'Auction ended',
+                    value: `<t:${Math.floor(auction.auctionEnd / 1000)}:f>`,
                     inline: true
                 }
             ]
@@ -346,24 +347,32 @@ module.exports = class Logger {
             const winners = auction.winners || [];
             const debited = new Set(auction.debitedPlayers || []);
             const reportByPlayer = new Map((debitReport || []).map(entry => [entry.player, entry]));
-            if (winners.length) {
+            // A bid whose owner could not pay for it at debit time is not a winner
+            // any more, so mapping over the winners would lose it. Saying so is the
+            // only trace left of a name this very message announced minutes ago.
+            const skipped = (debitReport || []).filter(entry => entry.status === 'skipped');
+            if (winners.length || skipped.length) {
+                const dkpLines = winners.map((winner) => {
+                    if (debited.has(winner.player)) {
+                        return `:white_check_mark: <@${winner.player}> - ${winner.amount} DKP taken`;
+                    }
+                    // No claim on the auction means nothing was taken, whatever the
+                    // reason. The report only says which reason to print.
+                    const status = reportByPlayer.get(winner.player)?.status;
+                    if (status === 'insufficient') {
+                        return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, balance too low`;
+                    }
+                    if (status === 'error') {
+                        return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, the write failed`;
+                    }
+                    return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, an officer must confirm`;
+                });
+                for (const entry of skipped) {
+                    dkpLines.push(`:arrow_down: <@${entry.player}> - ${entry.amount} DKP bid skipped, balance too low`);
+                }
                 embed.fields.push({
                     name: 'DKP',
-                    value: this.embedFieldValue(winners.map((winner) => {
-                        if (debited.has(winner.player)) {
-                            return `:white_check_mark: <@${winner.player}> - ${winner.amount} DKP taken`;
-                        }
-                        // No claim on the auction means nothing was taken, whatever the
-                        // reason. The report only says which reason to print.
-                        const status = reportByPlayer.get(winner.player)?.status;
-                        if (status === 'insufficient') {
-                            return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, balance too low`;
-                        }
-                        if (status === 'error') {
-                            return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, the write failed`;
-                        }
-                        return `:warning: <@${winner.player}> - ${winner.amount} DKP NOT taken, an officer must confirm`;
-                    })),
+                    value: this.embedFieldValue(dkpLines),
                     inline: false
                 })
             }
@@ -380,7 +389,13 @@ module.exports = class Logger {
                 )]
                 : [];
 
+            // content, like the embed, has to stop describing a running auction. It is
+            // the only part of the post that reaches the channel list and a reply quote,
+            // and left alone it went on reading 'Bid started - 50 DKP minimum bid. Should
+            // end at <a date now days past>. Results are posted about 20 minutes after
+            // the end.' above an embed that already names the winners.
             await message.edit({
+                content: `Auction ended on **${auction.item.name}**`,
                 embeds: [embed],
                 components
             })
@@ -407,7 +422,7 @@ module.exports = class Logger {
         const cancelButton = new ButtonBuilder().setCustomId('cancel_' + auction.id).setLabel('Cancel').setStyle(ButtonStyle.Danger);
         const row = new ActionRowBuilder().addComponents(button, buttonAlt, cancelButton);
 
-        const embed = this.itemToEmbed(auction.item, 15105570);
+        const embed = this.itemToEmbed(auction.item, colors.orange);
         embed.fields = [
             {
                 name: 'Auction ends',
@@ -456,14 +471,32 @@ module.exports = class Logger {
                     return;
                 }
 
-                // Bounded by what is left of the auction: an answer that arrives after the
-                // close has nothing to bid on. A dismissed modal rejects here and is not an
-                // error, so it resolves to null and the click is simply dropped.
+                // Deliberately not bounded by what is left of the auction any more.
+                // Discord keeps the form open for 15 minutes whatever this collector
+                // does, so giving up at the close left the submission with nobody to
+                // answer it: Discord put its own "Something went wrong. Try again." over
+                // a form the player could not get past, and never told them the auction
+                // was over. Waiting the full window means a late answer is received and
+                // answered. A dismissed modal rejects here and is not an error, so it
+                // resolves to null and the click is simply dropped.
+                openBidModal(modalId);
                 const submitted = await i.awaitModalSubmit({
-                    time: Math.max(5000, Math.min(auctionEndTimestamp * 1000 - Date.now(), 15 * 60 * 1000)),
+                    time: 15 * 60 * 1000,
                     filter: m => m.customId === modalId && m.user.id === i.user.id,
-                }).catch(() => null);
+                }).catch(() => null).finally(() => closeBidModal(modalId));
                 if (!submitted) {
+                    return;
+                }
+
+                // Ahead of the parse: once the auction is over the amount is beside the
+                // point, and this can name the item where Auctioner, which drops a closed
+                // auction from its list, would only be able to say 'Auction not found'.
+                if (!auction.auctionActive) {
+                    // An officer pulling the auction and the timer running out are the same
+                    // state to this guard, and 'ended' reads as 'it ran its course and
+                    // somebody won' - a bidder cancelled ten seconds into a five-minute
+                    // auction concluded they had simply typed too slowly.
+                    await safeReply(submitted, { content: auctionOverMessage(auction.item.name, auction.cancelled), flags: MessageFlags.Ephemeral });
                     return;
                 }
 
@@ -486,7 +519,18 @@ module.exports = class Logger {
                     // could not tell which one an unqualified "Bid placed" answered.
                     await safeReply(submitted, { content: `${forMain ? 'MAIN' : 'ALT'} bid of **${amount} DKP** placed on **${auction.item.name}**`, flags: MessageFlags.Ephemeral });
                 } catch (e) {
-                    await safeReply(submitted, { content: e.message, flags: MessageFlags.Ephemeral });
+                    // The auction can still close between the guard above and the call,
+                    // and then Auctioner refuses in its own words - which mean nothing to
+                    // a player. bidErrorMessage says the same thing as the guard.
+                    //
+                    // The flag is read here and not carried down from the guard, because
+                    // the guard passed while the auction was still running: the window
+                    // that matters opens after it, inside the getPlayer round trip
+                    // Auctioner.bid awaits. A Cancel landing there used to be reported to
+                    // the bidder as the auction having ended. The withdrawal above has no
+                    // such window - nothing between the guard and it suspends - so this
+                    // only ever matters for the bid.
+                    await safeReply(submitted, { content: bidErrorMessage(e, auction.item.name, auction.cancelled), flags: MessageFlags.Ephemeral });
                 }
             }
 
@@ -498,15 +542,55 @@ module.exports = class Logger {
                 await safeAck(i);
                 const cancelled = await Auctioner.instance.cancelAuction(auction.id);
                 if (!cancelled) {
-                    // Auction already closed (or closing) through its timer: the deferUpdate above is a silent no-op,
-                    // and the winners embed posted by the close callback must not be overwritten.
+                    // Auction already closed (or closing) through its timer: the winners embed
+                    // posted by the close callback must not be overwritten. followUp, never
+                    // safeReply: safeAck already deferred this, and a deferred component
+                    // interaction routes to editReply, which would replace that winners embed
+                    // with a bare line of text in public.
+                    await i.followUp({
+                        content: `That auction on **${auction.item.name}** is already over, so there was nothing to cancel. If the message names winners, press **Confirm Winner/s** as usual.`,
+                        flags: MessageFlags.Ephemeral
+                    }).catch(e => console.error('[auction buttons] cancel race notice failed', e?.code || '', e?.message || e));
                     return;
                 }
                 cancelButton.setDisabled(true);
                 cancelButton.setLabel('Auction Cancelled');
                 const row = new ActionRowBuilder().addComponents(cancelButton);
-                await message.edit({ embeds: [{ ...embed, color: colors.red }], components: [row] }).catch(e => console.error('[auction buttons] cancel edit failed', e));
+                // fields is rewritten rather than carried over: the spread is shallow, so
+                // reusing it left the running auction's 'Auction ends' value on the message -
+                // `<t:...:R>`, the one Discord style the client re-renders on a timer, so a
+                // cancelled auction went on counting for ever. It also pointed at the
+                // scheduled end, so a cancel twenty seconds in first read 'in 2 minutes'.
+                // Both replacements are fixed styles, and `:f` is what this file already uses.
+                const cancelledAt = Math.floor(new Date().getTime() / 1000);
+                const cancelledEmbed = {
+                    ...embed,
+                    color: colors.red,
+                    fields: [
+                        { name: 'Cancelled at', value: `<t:${cancelledAt}:f>`, inline: true },
+                        // A mention inside an embed resolves but never notifies. Nothing else
+                        // records who pulled it: a cancelled auction is not stored.
+                        { name: 'Cancelled by', value: `<@${i.user.id}>`, inline: true }
+                    ]
+                };
+                // content is passed explicitly because it is the only part of the message that
+                // reaches the channel list and a reply quote, where the embed does not exist.
+                // Left out, it went on saying 'Bid started' under a cancelled auction.
+                const edited = await message.edit({
+                    content: `Bid cancelled on **${auction.item.name}** - no winner, no DKP taken`,
+                    embeds: [cancelledEmbed],
+                    components: [row]
+                }).then(() => true).catch(e => { console.error('[auction buttons] cancel edit failed', e); return false; });
                 collector.stop();
+                if (!edited) {
+                    // The auction is dead either way, but the post still shows a countdown and
+                    // three bid buttons that now answer to nobody, so say so rather than
+                    // leaving the officer with the silence deferUpdate gives them.
+                    await i.followUp({
+                        content: `**${auction.item.name}** is cancelled - no winner, no DKP taken - but the post could not be updated, so it still shows a countdown and the bid buttons. Ignore them, or delete the message.`,
+                        flags: MessageFlags.Ephemeral
+                    }).catch(e => console.error('[auction buttons] cancel edit notice failed', e?.code || '', e?.message || e));
+                }
             }
         }))
 

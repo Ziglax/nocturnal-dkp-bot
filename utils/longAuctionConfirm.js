@@ -1,6 +1,8 @@
 const { PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { safeReply } = require('./safe.js');
-const { debitAuctionWinners } = require('./auctionDebit.js');
+const { debitAuctionWinners, beginSettlement, endSettlement } = require('./auctionDebit.js');
+const { settleAuctionWinners, skippedEntries } = require('./auctionReassign.js');
+const Auction = require('../Auctioner/Auction.js');
 
 /**
  * Serves the Confirm DKP button of a closed long auction.
@@ -73,7 +75,44 @@ const handleLongAuctionConfirm = async (interaction, manager, logger) => {
             return null;
         });
 
-        const report = await debitAuctionWinners(manager, guild, auction, winners, raid);
+        // A winner who cannot cover their bid loses the item to the next bid down.
+        // The rules are rebuilt from the stored auction so the replacement is picked
+        // exactly the way the original winner was: main/alt lock, overbid, random
+        // draw between equal amounts.
+        //
+        // The candidates are every stored bid, not the list the close pruned - which
+        // the document does not keep. A bid dropped at the close for want of DKP is
+        // therefore back in the running here, and takes the item only if its owner
+        // can pay for it now. That is the same test everybody else has to pass.
+        const rules = new Auction(guild, auction.item, auction.minBid, auction.numberOfItems, auction.minBidToLockForMain, auction.overBidtoWinMain);
+
+        // Two presses landing together must not each pick their own replacement: the
+        // per-player claim inside debitAuctionWinners cannot tell them apart once they
+        // are settling on different players, and one item would cost two people their
+        // DKP. Pressing twice in a row is still fine and still says 'already settled'.
+        if (!beginSettlement(auctionId)) {
+            await safeReply(interaction, { content: 'That auction is already being settled. Wait for the message to update before pressing again.', flags: MessageFlags.Ephemeral });
+            return;
+        }
+        let settled;
+        try {
+            settled = await settleAuctionWinners({
+                winners,
+                bids: auction.bids,
+                rules,
+                debit: winner => debitAuctionWinners(manager, guild, auction, [winner], raid).then(([entry]) => entry),
+            });
+            if (settled.changed) {
+                // Written before the re-read below, so the recap is drawn from the new
+                // winners rather than the ones this auction closed with, and inside the
+                // lock so no other press can read the old list back.
+                await manager.setAuctionWinners(guild, auctionId, settled.winners)
+                    .catch(e => console.error('[long auction confirm] could not record the new winner/s', auctionId, e?.message || e));
+            }
+        } finally {
+            endSettlement(auctionId);
+        }
+        const report = settled.report.concat(skippedEntries(settled.skipped));
 
         // Re-read before redrawing: the recap has to name who is actually recorded as
         // debited on the auction, not who this run believes it took. That also picks
@@ -88,13 +127,17 @@ const handleLongAuctionConfirm = async (interaction, manager, logger) => {
 
         const debited = report.filter(entry => entry.status === 'debited');
         const already = report.filter(entry => entry.status === 'already');
-        const failed = report.filter(entry => entry.status !== 'debited' && entry.status !== 'already');
+        const skipped = report.filter(entry => entry.status === 'skipped');
+        const failed = report.filter(entry => entry.status !== 'debited' && entry.status !== 'already' && entry.status !== 'skipped');
         const lines = [];
         if (debited.length) {
             lines.push(`Taken: ${debited.map(entry => `<@${entry.player}> (${entry.amount} DKP)`).join(', ')}`);
         }
         if (already.length) {
             lines.push(`Already settled: ${already.map(entry => `<@${entry.player}>`).join(', ')}`);
+        }
+        if (skipped.length) {
+            lines.push(`Skipped, balance too low: ${skipped.map(entry => `<@${entry.player}> (${entry.amount} DKP)`).join(', ')} - the item went to the next bid down.`);
         }
         if (failed.length) {
             lines.push(`:warning: Not taken: ${failed.map(entry => `<@${entry.player}> (${entry.amount} DKP, ${entry.status === 'insufficient' ? 'balance too low' : 'the write failed'})`).join(', ')} - press Confirm again, or use \`/removedkp\`.`);

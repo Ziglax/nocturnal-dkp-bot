@@ -11,6 +11,7 @@ module.exports = class Auction {
         this.winners = [];
         this.guild = guild;
         this.auctionActive = true;
+        this.cancelled = false;
         this.minBid = minBid;
         this.numberOfItems = numberOfItems === 0 ? 1 : numberOfItems;
         this.minBidToLockForMain = minBidToLockForMain;
