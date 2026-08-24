@@ -405,6 +405,60 @@ module.exports = class Logger {
         }
     }
 
+    // The other end of updateLongAuctionEmbed: /cancelauction voided this auction, so
+    // the post has to stop offering bid buttons and stop promising results.
+    //
+    // Deliberately NOT showing the bids. They are still in the document and an officer
+    // can read them with /auctiondetails, but a voided auction is usually re-run, and
+    // publishing what everyone bid the first time hands the next round to whoever reads
+    // the channel. Same reason the lock delay exists.
+    //
+    // Same failure shape as updateLongAuctionEmbed: a post that cannot be repainted -
+    // deleted message, channel gone, missing permission - returns false. The auction is
+    // already cancelled in the database by then; the command says so in its reply.
+    async updateLongAuctionCancelledEmbed(guildOptions, auction) {
+        const longAuctionChannel = guildOptions.longAuctionChannel || guildOptions.auctionChannel;
+        const messageId = auction.messageId;
+        if (!messageId) {
+            console.log('No messageId found for auction');
+            return false;
+        }
+        const channel = await this.client.channels.cache.get(longAuctionChannel);
+        try {
+            const message = await channel.messages.fetch(messageId);
+            const embed = this.itemToEmbed(auction.item, colors.red);
+            embed.fields = [
+                {
+                    name: 'Auction ID',
+                    value: "```" + auction._id + "```",
+                    inline: true
+                },
+                {
+                    name: 'Cancelled',
+                    value: `<t:${Math.floor((auction.cancelledAt || new Date().getTime()) / 1000)}:f>`,
+                    inline: true
+                },
+                {
+                    name: 'Cancelled by',
+                    value: auction.cancelledBy ? `<@${auction.cancelledBy}>` : 'An officer',
+                    inline: true
+                }
+            ]
+
+            // No Confirm button either: there is no winner to take DKP from, and
+            // claimAuctionDebit refuses a cancelled auction anyway.
+            await message.edit({
+                content: `Auction cancelled on **${auction.item.name}** - no winner, no DKP taken`,
+                embeds: [embed],
+                components: []
+            })
+            return true
+        } catch (e) {
+            console.log(e);
+            return false
+        }
+    }
+
     async sendAuctionStartEmbed(guildOptions, auction, minBid = 0, numberOfItems = 1) {
         const discordGuild = await this.client.guilds.fetch(guildOptions.guild);
         const channel = discordGuild.channels.cache.get(guildOptions.auctionChannel);

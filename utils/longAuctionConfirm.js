@@ -63,7 +63,16 @@ const handleLongAuctionConfirm = async (interaction, manager, logger) => {
 
         const winners = auction.winners || [];
         if (!winners.length) {
-            await safeReply(interaction, { content: 'That auction closed without a winner, so there is nothing to take.', flags: MessageFlags.Ephemeral });
+            // A cancelled auction lands here too - /cancelauction writes an empty
+            // winners list precisely so it does. It clears the button as well, but
+            // somebody can still be holding the message from before the cancel, and
+            // 'closed without a winner' would be the wrong story to tell them.
+            await safeReply(interaction, {
+                content: auction.cancelled
+                    ? 'That auction was cancelled, so there is nothing to take.'
+                    : 'That auction closed without a winner, so there is nothing to take.',
+                flags: MessageFlags.Ephemeral,
+            });
             return;
         }
 

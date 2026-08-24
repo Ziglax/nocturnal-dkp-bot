@@ -65,6 +65,14 @@ const expiredBidWindowMessage = () => `:hourglass: That bid window is no longer 
 // failure and must not be reported as the auction being over.
 const AUCTION_OVER = /^Auction (has ended|not active|is not active|not found)$/;
 
+// The long auction half of the same problem, and it could not be solved the same
+// way. A short auction lives in memory, so the caller can read auction.cancelled
+// at the moment the bid was refused; a long auction lives in the database, and the
+// bidder's process never sees the document /cancelauction wrote. So DKPManager
+// says which of the two happened in the string it throws, and this is that string.
+// It is the only member of AUCTION_OVER's family that carries its own cause.
+const AUCTION_CANCELLED = /^Auction was cancelled$/;
+
 // `cancelled` is the auction's own flag, read by the caller at the moment the bid
 // was refused. There is exactly one window where that differs from reading it
 // when the form opened: Auctioner.bid suspends in a getPlayer round trip, and an
@@ -78,13 +86,21 @@ const AUCTION_OVER = /^Auction (has ended|not active|is not active|not found)$/;
 // only logs - leaving the modal unacknowledged and the player stuck behind
 // Discord's own "Something went wrong", which is the exact failure this file
 // exists to remove. Omitted, this behaves exactly as it always did, which is what
-// the long auction path wants: it has no Cancel button, so 'ended' is the only
-// wording that can ever be right for it.
-const bidErrorMessage = (error, itemName, cancelled = false) => (
-    AUCTION_OVER.test(error?.message || '')
+// the long auction path wants: it has no button to read a flag from, so it lets
+// the thrown string speak instead - see AUCTION_CANCELLED above.
+const bidErrorMessage = (error, itemName, cancelled = false) => {
+    const message = error?.message || '';
+    // Tested first, and without consulting `cancelled`: this string exists only
+    // because DKPManager read the flag off the document, which outranks anything a
+    // caller could infer from an object it is holding.
+    if (AUCTION_CANCELLED.test(message)) {
+        return cancelledAuctionMessage(itemName);
+    }
+
+    return AUCTION_OVER.test(message)
         ? auctionOverMessage(itemName, cancelled)
-        : (error?.message || 'The bid could not be placed')
-);
+        : (message || 'The bid could not be placed');
+};
 
 module.exports = {
     openBidModal,
