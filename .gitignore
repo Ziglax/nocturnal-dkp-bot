@@ -4,6 +4,7 @@ config.json
 backups/*
 debuger.js
 .vscode/*
+.idea/*
 error.log
 logs/
 generate_statistics.js
