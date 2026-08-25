@@ -55,6 +55,7 @@ Compose stacks: `docker-compose.yml` (bot + MongoDB), `docker-compose.nas.yml` (
 - No `npm start` script. Bare metal: `npm ci --omit=dev && node index.js`. Env comes from `.env` (see `.env_example`; `LOG_FILE` may be empty to disable file logging).
 - Docker: `docker compose up -d --build` (Option A). Never run `docker compose down -v` — it deletes the `mongo-data` volume (the whole DB). When deps change: `docker compose up -d --build -V`.
 - Tests: `npx jest` (dev dependency — `npm install` first, not in the Docker image). **Danger: the specs hard-code `mongodb://localhost:27017` (ignoring `MONGO_URL`) and wipe the local `players`, `raids` and `options` collections (the Auction spec also leaves data in `auctions`).** Run only against a throwaway local MongoDB, never where port 27017 reaches a real database. There is no lint or typecheck command.
+- Dependencies are kept audit-clean: `npm install` / `npm audit` must report `0 vulnerabilities`. If `npm audit` reports anything, run the non-breaking `npm audit fix` first; for the remaining `node-zip`/`jszip` issue do NOT use `npm audit fix --force` (it downgrades `node-zip` to a dependency-free 1.0.1) — keep `backup.js` on `jszip` and drop `node-zip` (see Gotchas).
 
 ## Gotchas
 
@@ -64,3 +65,4 @@ Compose stacks: `docker-compose.yml` (bot + MongoDB), `docker-compose.nas.yml` (
 - `raiddeprecationtime` deprecation is one-way: the flag is never removed once set.
 - Compose interpolates `.env` (`env_file`), so write `$` in values (e.g. Atlas passwords) as `$$`.
 - There is no `/parsedkps` command any more (removed, along with `logParser/`); `/registercharacter` data is not consumed by the bot.
+- `commands/backup.js` zips with `jszip` (replaces the abandoned `node-zip`, which pulled in `jszip@2.5.0`). jszip 3's `generateAsync` returns a Promise and uses `type: 'nodebuffer'` to get a Buffer directly — no `Buffer.from(..., 'binary')` wrapper.
