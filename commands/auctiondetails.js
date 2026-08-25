@@ -78,6 +78,11 @@ module.exports = {
 
         let message = `Auction details: ${auction.item.name} - ${auction._id}\n`;
         message += `Number of items: ${auction.numberOfItems}\n`;
+        // A cancelled auction has bids and no winners, which reads exactly like an
+        // auction nobody won. Say which of the two it is before printing either.
+        if (auction.cancelled) {
+            message += `CANCELLED by <@${auction.cancelledBy}>${auction.cancelledAt ? ` on <t:${Math.floor(auction.cancelledAt / 1000)}:f>` : ''} - no winner, no DKP taken\n`;
+        }
 
         message += `Bids:\n`;
         if (auction.bids.length) {

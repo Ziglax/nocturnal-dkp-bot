@@ -11,6 +11,7 @@ module.exports = class Auction {
         this.winners = [];
         this.guild = guild;
         this.auctionActive = true;
+        this.cancelled = false;
         this.minBid = minBid;
         this.numberOfItems = numberOfItems === 0 ? 1 : numberOfItems;
         this.minBidToLockForMain = minBidToLockForMain;
@@ -77,6 +78,14 @@ module.exports = class Auction {
     }
 
     validateBidAmount(amount, player) {
+        // calculateWinner looks the bidder up in a list its caller built, and that
+        // lookup comes back undefined when the record could not be read. Say so
+        // instead of letting the balance check below throw a TypeError that the
+        // caller would then file as the bid's rejection reason.
+        if (!player) {
+            throw new Error('Player record could not be read');
+        }
+
         if (amount <= 0) {
             throw new Error('DKP - Bot scowls at you. Bid amount must be greater than 0');
         }
@@ -114,36 +123,15 @@ module.exports = class Auction {
                 continue;
             }
             if (filteredbids[0].amount === filteredbids[1].amount) {
-                //attendance tie breaker
-                const topBidders = filteredbids.filter(bid => bid.amount === filteredbids[0].amount);
-                const sortedByAttendance = topBidders.sort((a, b) => b.attendance - a.attendance);
-                const topAttendance = sortedByAttendance.filter(bid => bid.attendance === sortedByAttendance[0].attendance);
-
-                if (topAttendance.length === 1) {
-                    topBids.push(topAttendance[0]);
-                    const index = filteredbids.findIndex(bid => bid.player === topAttendance[0].player);
-                    filteredbids.splice(index, 1);
-                    continue;
-                }
-
-                if (topAttendance[0].attendance > topAttendance[1].attendance) {
-                    topBids.push(topAttendance[0]);
-                    const index = filteredbids.findIndex(bid => bid.player === topAttendance[0].player);
-                    filteredbids.splice(index, 1);
-                    continue;
-                }
-
-                if (topAttendance[0].attendance < topAttendance[1].attendance) {
-                    topBids.push(filteredbids[1]);
-                    const index = filteredbids.findIndex(bid => bid.player === topAttendance[0].player);
-                    filteredbids.splice(index, 1);
-                    continue;
-                }
-
-                const winnerIndex = Math.floor(Math.random() * topAttendance.length);
+                // Equal amounts are settled by a straight random draw among every bid
+                // tied at the top amount. filteredbids is sorted by amount descending,
+                // so that tied group is its head: an index drawn below tiedCount always
+                // lands on a tied bid, and splicing the same index removes the one that
+                // was drawn.
+                const tiedCount = filteredbids.filter(bid => bid.amount === filteredbids[0].amount).length;
+                const winnerIndex = Math.floor(Math.random() * tiedCount);
                 topBids.push(filteredbids[winnerIndex]);
                 filteredbids.splice(winnerIndex, 1);
-
             }
         }
 

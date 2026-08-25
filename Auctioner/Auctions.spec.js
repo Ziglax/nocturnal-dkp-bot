@@ -174,25 +174,11 @@ describe('Auctioner', () => {
             expect(auction.winner.player).toBe(player1);
         });
 
-        it('should use attendance when bids are equal', async () => {
+        it('should split equal bids at random', async () => {
             const item = 'item';
-            await manager.addDKP(guild, player1, 50, 'comment');
+            await manager.addDKP(guild, player1, 100, 'comment');
             await manager.addDKP(guild, player2, 100, 'comment');
             await manager.addDKP(guild, player3, 100, 'comment');
-
-            const date = new Date().getTime();
-
-            await manager.raids.insertOne({
-                guild,
-                name: 'raid',
-                date: date + 500000,
-                attendance: [
-                    { players: [player1, player2, player3], comment: 'Start', date, dkps: 1 },
-                    { players: [player1], comment: 'Tick', date, dkps: 1 }
-                ],
-                active: false,
-                deprecated: false,
-            });
 
             const callback = jest.fn();
             const auction = auctioner.startAuction(item, guild, callback);
@@ -202,7 +188,31 @@ describe('Auctioner', () => {
             await auctioner.bid(guild, auction.id, 20, player1);
             await endSetTimeout();
 
-            expect(auction.winner.player).toBe(player1);
+            expect([player1, player2, player3]).toContain(auction.winner.player);
+            expect(auction.winner.amount).toBe(20);
+        });
+
+        it('should draw the tie winner from every bid tied at the top amount', () => {
+            // Straight to getTopBids: no database, no attendance, so the draw is the
+            // only thing left deciding. Pinning Math.random walks it across the whole
+            // tied group, which is what the old attendance tie breaker got wrong.
+            const auction = new Auction(guild, 'item', 0, 1, 0, 0);
+            const bids = () => [
+                { player: player1, amount: 20, bidForMain: true },
+                { player: player2, amount: 20, bidForMain: true },
+                { player: player3, amount: 20, bidForMain: true },
+            ];
+
+            const random = jest.spyOn(Math, 'random');
+            try {
+                const winners = [0, 0.5, 0.99].map((value) => {
+                    random.mockReturnValue(value);
+                    return auction.getTopBids(bids(), 1)[0].player;
+                });
+                expect(winners).toEqual([player1, player2, player3]);
+            } finally {
+                random.mockRestore();
+            }
         });
 
         it('main bids should have priority over ALT bids', async () => {

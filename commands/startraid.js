@@ -63,21 +63,34 @@ module.exports = {
         }
         const comment = 'Start';
         const raid = await manager.createRaid(guild, name, tickDuration, dkpsPerTick, eventId);
-        playersInChannel.forEach(async player => {
-            await manager.addDKP(guild, player, dkpsPerTick, comment, raid);
-        });
+        // Awaited one at a time, and the attendance snapshot with them. The two
+        // forEach(async ...) loops fired every write and waited for none, so the
+        // raid was announced - and the Start snapshot written - before anyone had
+        // actually been credited, and a write that failed failed in silence.
+        const credited = [];
+        const failed = [];
+        for (const player of [...playersInChannel, ...playersInSecondChannel]) {
+            try {
+                await manager.addDKP(guild, player, dkpsPerTick, comment, raid);
+                credited.push(player);
+            } catch (error) {
+                console.error('[startraid] Start DKP write failed', player, error?.message || error);
+                failed.push(player);
+            }
+        }
 
-        playersInSecondChannel.forEach(async player => {
-            await manager.addDKP(guild, player, dkpsPerTick, comment, raid);
-        });
-
-        manager.addRaidAttendance(guild, raid, [...playersInChannel, ...playersInSecondChannel], comment, dkpsPerTick);
+        // Only the players actually credited: a snapshot naming someone who got no
+        // Start DKP would count towards their attendance % for free.
+        await manager.addRaidAttendance(guild, raid, credited, comment, dkpsPerTick);
 
         const minutes = tickDuration / 60000;
-        await interaction.reply({ content: `Raid ${name} started with ${dkpsPerTick} DKP per tick every ${minutes} minutes`, flags: MessageFlags.Ephemeral }
+        const failureNote = failed.length
+            ? ` :warning: ${failed.length} player(s) could not be credited the Start DKP and were left out of the snapshot: ${failed.slice(0, 10).map(id => `<@${id}>`).join(', ')}${failed.length > 10 ? ` and ${failed.length - 10} more` : ''}`
+            : '';
+        await interaction.reply({ content: `Raid ${name} started with ${dkpsPerTick} DKP per tick every ${minutes} minutes${failureNote}`, flags: MessageFlags.Ephemeral }
         );
 
-        logger.sendRaidEmebed(guildConfig, raid, [...playersInChannel, ...playersInSecondChannel], 5763719, `${name} raid Start`);
+        logger.sendRaidEmebed(guildConfig, raid, credited, 5763719, `${name} raid Start`);
     },
     restricted: true,
 };

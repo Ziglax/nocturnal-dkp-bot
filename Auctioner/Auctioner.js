@@ -31,11 +31,27 @@ class Auctioner {
             if (!auction.auctionActive) {
                 return;
             }
+            // Closed here, before the first await rather than after the lookups
+            // below. Those lookups are database round trips, and the auction used to
+            // stay open across them: a bid landing in that window was confirmed to
+            // the bidder and then silently dropped by calculateWinner, and a Cancel
+            // landing there returned true, painted the message cancelled, and was
+            // then overwritten by a winners embed carrying a live Confirm button.
+            // Nothing awaits between the guard above and this line, so the window is
+            // now zero-width.
+            auction.endAuction();
             try {
+                // A bidder the database cannot produce - record deleted, transient
+                // read failure - loses their own bid and nothing more. The close only
+                // ever fires once, so letting one lookup reject would leave the item
+                // unawarded for good, with no retry anywhere.
                 const players = this.dkpManager
-                    ? await Promise.all(auction.bids.map(bid => this.dkpManager.getPlayer(guild, bid.player, checkAttendance)))
+                    ? (await Promise.all(auction.bids.map(bid => this.dkpManager.getPlayer(guild, bid.player, checkAttendance)
+                        .catch((error) => {
+                            console.error('[auctioner] dropping a bidder from the close', auction.id, bid.player, error?.message || error);
+                            return null;
+                        })))).filter(Boolean)
                     : [];
-                auction.endAuction();
                 auction.calculateWinner(players);
 
                 // Store the short auction in the database when it ends
@@ -64,6 +80,16 @@ class Auctioner {
         if (!auction || !auction.auctionActive) {
             return false;
         }
+        // Set BEFORE endAuction, not after. endAuction only clears auctionActive,
+        // which is indistinguishable from the timer expiring - which is why a bidder
+        // whose auction was pulled was told it had ended. Everything downstream reads
+        // the flag to tell those two apart, so it must never be possible to observe
+        // the auction inactive but not yet marked cancelled. Nothing suspends between
+        // these two lines today; this ordering means nothing has to.
+        //
+        // In memory only, and never persisted: a cancelled auction is not stored at
+        // all, and storeShortAuction builds its document field by field.
+        auction.cancelled = true;
         auction.endAuction();
         this.removeAuction(auctionId);
         return true;
@@ -90,8 +116,9 @@ class Auctioner {
     // needs nothing from the player record, and a bidder whose record went missing
     // must still be able to pull out.
     // Returns true when a bid was removed, false when the player had none.
-    // Throws 'Auction not found' once the auction has closed, because removeAuction()
-    // drops it from the list in startAuction's finally block.
+    // Throws 'Auction is not active' while the close is running and 'Auction not
+    // found' after it, because removeAuction() drops the auction from the list in
+    // startAuction's finally block.
     async removeBid(guild, auctionId, player) {
         const auction = this.auctions.find(auction => auction.id === auctionId && auction.guild === guild);
         if (!auction) {

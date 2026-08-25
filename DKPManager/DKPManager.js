@@ -1,4 +1,5 @@
 const { ObjectId } = require("mongodb");
+const { DEFAULT_LOCK_DELAY } = require("../utils/auctionDebit.js");
 
 module.exports = class DKPManager {
     constructor(dbClient) {
@@ -104,9 +105,21 @@ module.exports = class DKPManager {
         );
     }
 
+    // A debit only goes through when the player actually holds the DKP. The balance
+    // check rides in the filter, so checking and writing are one atomic operation:
+    // two debits racing over the same pool - a short auction confirmed while the
+    // worker closes a long one, an officer removing DKP at the same moment - cannot
+    // both pass it, and the loser writes nothing.
+    //
+    // Returns the updated player document, or null when the balance was too low or
+    // the player has no record. null means nothing was written, so every caller must
+    // report it as a failure rather than as a removal.
+    //
+    // Deliberately not an upsert any more: upserting on a player who had no record
+    // conjured one sitting at minus the debited amount.
     async removeDKP(guild, player, dkp, comment, raid = null, item = null) {
         return this.players.findOneAndUpdate(
-            { player, guild },
+            { player, guild, current: { $gte: dkp } },
             {
                 $inc: { current: -dkp },
                 $push: {
@@ -118,9 +131,8 @@ module.exports = class DKPManager {
                         item,
                     },
                 },
-                $setOnInsert: { creationDate: new Date().getTime() },
             },
-            { upsert: true },
+            { returnDocument: 'after' },
         );
     }
 
@@ -250,7 +262,7 @@ module.exports = class DKPManager {
         return this.guildOptions.findOne({ guild });
     }
 
-    async createAution(guild, item, minBid, numberOfItems, minBidToLockForMain, overBidtoWinMain, duration) {
+    async createAution(guild, item, minBid, numberOfItems, minBidToLockForMain, overBidtoWinMain, duration, autoDebit = true, lockDelay = DEFAULT_LOCK_DELAY) {
         const auction = {
             guild,
             item,
@@ -262,6 +274,12 @@ module.exports = class DKPManager {
             auctionActive: true,
             createdAt: new Date().getTime(),
             auctionEnd: new Date().getTime() + duration,
+            // The three fields below are additive: an auction document written
+            // before they existed simply does not carry them, and every reader
+            // defaults it back to the behaviour it was started under.
+            autoDebit,
+            lockDelay,
+            debitedPlayers: [],
         };
 
         const result = await this.auctions.insertOne(auction);
@@ -293,17 +311,133 @@ module.exports = class DKPManager {
         return this.auctions.updateOne({ _id: auction._id, guild }, { $set: { messageId } });
     }
 
+    // Closing is a compare-and-swap on auctionActive; the read below only runs when
+    // that fails, to tell 'no such auction' apart from 'somebody got there first'.
+    // The old shape read the auction, checked the flag and then wrote without it, so
+    // two overlapping worker ticks - or a tick landing on the same millisecond as
+    // /cancelauction - both passed the check and both wrote, the loser overwriting a
+    // result on an auction it had already settled.
+    //
+    // matchedCount, not modifiedCount: matching is what grants ownership here, and an
+    // update that happens to write the identical winners still means this caller won.
+    // Both thrown strings are the ones this method already threw.
     async endAuction(guild, auctionId, winners) {
-        //check if auction is active
-        const auction = await this.auctions.findOne({ _id: new ObjectId(auctionId), guild });
-        if (!auction) {
-            throw new Error('Auction not found');
-        }
-        if (auction.auctionActive === false) {
-            throw new Error('Auction not active');
+        const result = await this.auctions.updateOne(
+            { _id: new ObjectId(auctionId), guild, auctionActive: true },
+            { $set: { auctionActive: false, winners } },
+        );
+        if (result.matchedCount === 0) {
+            const auction = await this.auctions.findOne({ _id: new ObjectId(auctionId), guild });
+            throw new Error(auction ? 'Auction not active' : 'Auction not found');
         }
 
-        return this.auctions.updateOne({ _id: auction._id, guild }, { $set: { auctionActive: false, winners } });
+        return result;
+    }
+
+    // Stops an auction taking bids without settling it, for /endauction.
+    //
+    // auctionActive was never what stopped a bidder: bid() and removeBid() require it
+    // rather than change it, and two updates that both demand the same value never lose
+    // to each other - so the compare-and-swap in endAuction cannot see a bid at all. The
+    // deadline is what stops them, and the worker never had to think about that because
+    // it only ever closes auctions whose auctionEnd is already behind them. An officer
+    // closing early is the first caller for which it is still days away, so the deadline
+    // has to be pulled in before the bids are read, not after the winners are written.
+    //
+    // One millisecond behind now, because those two checks refuse on `auctionEnd < now`:
+    // a check running on this very millisecond would otherwise still pass.
+    //
+    // lockDelay goes to 0 with it. Nothing reads it after a close except the worker's own
+    // close filter, and leaving it at twenty minutes would hold the auction there for
+    // that long if the settlement failed halfway; at 0 the next tick finishes the job.
+    //
+    // Compare-and-swap on auctionActive, like endAuction and cancelAuction above: null
+    // means the worker or /cancelauction got there first. The document comes back with
+    // the bids as they stood the moment bidding stopped, and that is the list the caller
+    // has to settle - reading them again later would reopen the window this closes.
+    async closeAuctionBidding(guild, auctionId) {
+        return this.auctions.findOneAndUpdate(
+            { _id: new ObjectId(auctionId), guild, auctionActive: true },
+            { $set: { auctionEnd: new Date().getTime() - 1, lockDelay: 0 } },
+            { returnDocument: 'after' },
+        );
+    }
+
+    // Voids a long auction: it stops taking bids and is never settled. The bids are
+    // deliberately kept - an officer has to be able to read what was bid on an
+    // auction they pulled, and /auctiondetails is the only way to do that.
+    //
+    // cancelled/cancelledAt/cancelledBy are additive, exactly like autoDebit above: a
+    // document written before this command existed carries none of them, and every
+    // reader treats a missing flag as 'not cancelled'. That is why the filters that
+    // refuse a cancelled auction say `cancelled: { $ne: true }` and not
+    // `cancelled: false`, which would match no auction in flight today.
+    //
+    // winners is set to an empty array on purpose. /auctiondetails reports a missing
+    // winners field as 'closed before the bot stored winners', which would be a lie
+    // about an auction that was voided minutes ago.
+    //
+    // auctionActive: true in the filter makes this a compare-and-swap, so an auction
+    // the worker closed a millisecond earlier comes back null instead of being voided
+    // after its winners were already debited. The document is returned so the caller
+    // can repaint the post without a second read; null means nothing matched.
+    async cancelAuction(guild, auctionId, cancelledBy) {
+        return this.auctions.findOneAndUpdate(
+            { _id: new ObjectId(auctionId), guild, auctionActive: true },
+            {
+                $set: {
+                    auctionActive: false,
+                    cancelled: true,
+                    cancelledAt: new Date().getTime(),
+                    cancelledBy,
+                    winners: [],
+                },
+            },
+            { returnDocument: 'after' },
+        );
+    }
+
+    // Rewrites the winners of an auction that is already closed, which endAuction
+    // refuses to do. The winner picked at the close can turn out to be unable to
+    // pay by the time the DKP are actually taken, and the item then goes down the
+    // bid list - a change that has to be recorded, because this field is what the
+    // auction message, /auctiondetails and every outside reader are drawn from.
+    // Only the existing winners field is touched; nothing is added to the document.
+    //
+    // A cancelled auction is closed too, and it has no winners to rewrite: `$ne true`
+    // rather than false, because an auction started before /cancelauction existed
+    // carries no cancelled field at all.
+    async setAuctionWinners(guild, auctionId, winners) {
+        return this.auctions.updateOne(
+            { _id: new ObjectId(auctionId), guild, auctionActive: false, cancelled: { $ne: true } },
+            { $set: { winners } },
+        );
+    }
+
+    // One winner, one debit. debitedPlayers is the auction's own record of who has
+    // already been taken, and $addToSet behind a `debitedPlayers: {$ne: player}`
+    // filter is a single atomic update: when the worker's automatic debit and an
+    // officer's Confirm land together, exactly one of them comes back with
+    // modifiedCount 1 and goes on to write the DKP.
+    // Only a closed auction can be debited, hence the auctionActive guard - and only
+    // one that was closed on its merits, hence the cancelled one. A voided auction has
+    // no winners, so nothing should ever reach here; this clause is what makes that
+    // true even for a stale Confirm button somebody still has on screen.
+    async claimAuctionDebit(guild, auctionId, player) {
+        const result = await this.auctions.updateOne(
+            { _id: new ObjectId(auctionId), guild, auctionActive: false, cancelled: { $ne: true }, debitedPlayers: { $ne: player } },
+            { $addToSet: { debitedPlayers: player } },
+        );
+        return result.modifiedCount === 1;
+    }
+
+    // Hands a claim back when the debit behind it did not go through, so Confirm can
+    // be pressed again once the balance is there.
+    async releaseAuctionDebit(guild, auctionId, player) {
+        return this.auctions.updateOne(
+            { _id: new ObjectId(auctionId), guild },
+            { $pull: { debitedPlayers: player } },
+        );
     }
 
     async removeBid(guild, auctionId, player) {
@@ -313,10 +447,32 @@ module.exports = class DKPManager {
             throw new Error('Auction not found');
         }
         if (auction.auctionActive === false) {
-            throw new Error('Auction not active');
+            // Two different pieces of news for the bidder, and only the document can
+            // tell them apart: the timer ran out, or an officer pulled the auction.
+            throw new Error(auction.cancelled ? 'Auction was cancelled' : 'Auction not active');
+        }
+        // The same deadline bid() enforces. auctionActive on its own is not enough:
+        // the worker deliberately waits out the lock delay before closing a finished
+        // auction, so between the advertised end and that close the flag is still
+        // true. Withdrawing in that window pulled the winning bid after bidding was
+        // supposed to be over and handed the item to the runner-up.
+        if (auction.auctionEnd < new Date().getTime()) {
+            throw new Error('Auction has ended');
         }
 
-        return this.auctions.updateOne({ _id: auction._id, guild }, { $pull: { bids: { player: player.player } } });
+        // auctionActive belongs in the filter, not only in the check above: the read
+        // and this write are two round trips, and a cancel landing between them used to
+        // delete a bid out of a voided auction - the one record a void keeps.
+        const result = await this.auctions.updateOne(
+            { _id: auction._id, guild, auctionActive: true },
+            { $pull: { bids: { player: player.player } } },
+        );
+        if (result.matchedCount === 0) {
+            const fresh = await this.auctions.findOne({ _id: auction._id, guild });
+            throw new Error(fresh?.cancelled ? 'Auction was cancelled' : 'Auction not active');
+        }
+
+        return result;
     }
 
     async bid(guild, auctionId, amount, player, bidForMain = true) {
@@ -332,6 +488,13 @@ module.exports = class DKPManager {
         if (!auction) {
             throw new Error('Auction not found');
         }
+        // This was never checked here at all, despite the comment above: the deadline
+        // below was the only stop, so a bid could still land on an auction the worker
+        // had already closed and debited - and, once /cancelauction existed, on a
+        // voided one, which removeBid would then refuse to undo.
+        if (auction.auctionActive === false) {
+            throw new Error(auction.cancelled ? 'Auction was cancelled' : 'Auction not active');
+        }
         if (auction.auctionEnd < new Date().getTime()) {
             throw new Error('Auction has ended');
         }
@@ -345,16 +508,28 @@ module.exports = class DKPManager {
         }
 
         //auction contains player bid
-        if (auction.bids.find(bid => bid.player === player.player)) {
+        const update = auction.bids.find(bid => bid.player === player.player)
             //update that player bid
-            return this.auctions.updateOne(
-                { _id: auction._id, guild, 'bids.player': player.player },
+            ? this.auctions.updateOne(
+                { _id: auction._id, guild, auctionActive: true, 'bids.player': player.player },
                 { $set: { 'bids.$.amount': amount, 'bids.$.bidForMain': bidForMain } },
-            );
-        } else {
+            )
             //add bid
-            return this.auctions.updateOne({ _id: auction._id, guild }, { $push: { bids: { player: player.player, amount, bidForMain } } });
+            : this.auctions.updateOne(
+                { _id: auction._id, guild, auctionActive: true },
+                { $push: { bids: { player: player.player, amount, bidForMain } } },
+            );
+
+        const result = await update;
+        if (result.matchedCount === 0) {
+            // The close or the cancel landed between the read above and this write.
+            // Re-read rather than guess: which of the two happened is the only thing the
+            // bidder is actually told, and this window is milliseconds wide.
+            const fresh = await this.auctions.findOne({ _id: auction._id, guild });
+            throw new Error(fresh?.cancelled ? 'Auction was cancelled' : 'Auction not active');
         }
+
+        return result;
     }
 
     // Short Auctions Methods

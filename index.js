@@ -11,6 +11,8 @@ const Logger = require('./utils/Logger');
 const Auctioner = require('./Auctioner/Auctioner.js');
 const { safeReply } = require('./utils/safe.js');
 const { handleLongAuctionBid } = require('./utils/longAuctionBid.js');
+const { handleLongAuctionConfirm } = require('./utils/longAuctionConfirm.js');
+const { isBidModal, isBidModalPending, expiredBidWindowMessage } = require('./utils/bidModals.js');
 
 // Process-level safety nets: a rejected promise or stray exception must not
 // kill the bot mid-raid. Log-only by policy (prod restarts are slow and lose
@@ -80,6 +82,29 @@ client.on(Events.InteractionCreate, async interaction => {
 		} catch (error) {
 			console.error('[long auction bid]', error);
 		}
+		return;
+	}
+
+	// Same story for the Confirm button of a closed long auction: the worker closes
+	// it long after the command that started it has gone, so no collector owns it.
+	if (interaction.isButton() && interaction.customId.startsWith('lconfirm_')) {
+		try {
+			await handleLongAuctionConfirm(interaction, dkpManager, logger);
+		} catch (error) {
+			console.error('[long auction confirm]', error);
+		}
+		return;
+	}
+
+	// A bid modal nobody is waiting on any more: the collector that opened it timed
+	// out, or the process restarted while the form was up. Discord still delivers the
+	// submission, and if nothing acknowledges it the player is left staring at
+	// Discord's own "Something went wrong. Try again." on a form that will not close.
+	// Anything still being awaited is registered as pending and is left alone - the
+	// registration covers the whole synchronous dispatch of this event, so this runs
+	// correctly whether it is called before or after the collector's own listener.
+	if (interaction.isModalSubmit() && isBidModal(interaction.customId) && !isBidModalPending(interaction.customId)) {
+		await safeReply(interaction, { content: expiredBidWindowMessage(), flags: MessageFlags.Ephemeral });
 		return;
 	}
 
