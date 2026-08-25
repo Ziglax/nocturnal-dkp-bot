@@ -1,6 +1,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const fs = require('fs');
-const zip = new require('node-zip')();
+const zip = new (require('jszip'))();
 const log = require('../debugger.js');
 
 
@@ -34,8 +34,7 @@ module.exports = {
             //compress files
             zip.file('players.json', fs.readFileSync(playersFile));
             zip.file('raids.json', fs.readFileSync(raidsFile));
-            const zipContent = zip.generate({ base64: false, compression: 'DEFLATE' });
-            const zipFile = Buffer.from(zipContent, 'binary');
+            const zipFile = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 
             //send files as .zip	
             await interaction.editReply({ content: `Backup created ${new Date().toLocaleString()}`, files: [{ attachment: zipFile, name: 'backup.zip' }] });
